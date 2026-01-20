@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * (C) Copyright 2022 FriendlyElec Computer Tech. Co., Ltd.
+ * (http://www.friendlyelec.com)
+ *
+ * Copyright (c) 2021 Rockchip Electronics Co., Ltd
+ */
+
+/dts-v1/;
+#include "rk3588.dtsi"
+#include "rk3588-u-boot.dtsi"
+#include <dt-bindings/input/input.h>
+
+
+/ {
+	model = "MicroSLAM - Rockchip RK3588";
+    	compatible = "rockchip,rk3588";
+
+        aliases {
+                mmc0 = &sdhci;
+                mmc1 = &sdmmc;
+        };
+
+        chosen {
+                stdout-path = &uart6;
+                u-boot,spl-boot-order = &sdmmc, &sdhci, &spi_nand, &spi_nor;
+        };
+
+        secure-otp@fe3a0000 {
+                u-boot,dm-spl;
+                compatible = "rockchip,rk3588-secure-otp";
+                reg = <0x0 0xfe3a0000 0x0 0x4000>;
+        };
+};
+
+&uart6 {
+  	pinctrl-names = "default";
+  	pinctrl-0 = <&uart6m0_xfer>; /* 需与 linux 的 pinctrl 同步 */
+  	u-boot,dm-spl;     /* SPL 阶段激活 pinmux 和时钟 */
+  	status = "okay";
+  	clock-frequency = <1500000>; /* SPL 可识别的波特 */
+};

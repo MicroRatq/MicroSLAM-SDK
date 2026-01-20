@@ -1,0 +1,31 @@
+# 被引用的仓库目录
+/repos
+
+# userpatches 目录（所有内容从 configs 生成，不应手动维护）
+/userpatches/
+
+# 编译输出目录
+/output/
+*.img
+*.img.xz
+
+# 临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日志文件
+*.log
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 编辑器配置
+.vscode/
+.idea/
+
+# 系统文件
+Thumbs.db

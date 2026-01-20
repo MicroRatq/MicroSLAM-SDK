@@ -1,0 +1,30 @@
+services:
+  microslam-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_ID: ${USER_ID:-1000}
+        GROUP_ID: ${GROUP_ID:-1000}
+        DOCKER_GID: ${DOCKER_GID:-999}
+        USER_PASSWORD: ${USER_PASSWORD:-1}
+    restart: unless-stopped
+    container_name: microslam
+    privileged: true
+    stdin_open: true
+    tty: true
+    volumes:
+      - "./:/MicroSLAM-SDK"
+      - "./repos:/MicroSLAM-SDK/repos"
+      # 挂载Docker socket，允许容器内使用Docker（用于Armbian build）
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      - DEBIAN_FRONTEND=noninteractive
+      # 禁用Armbian的Docker检查（因为我们在容器内构建，不需要Docker-in-Docker）
+      - USE_CCACHE=no
+    networks:
+      - microslam-network
+
+networks:
+  microslam-network:
+    driver: bridge

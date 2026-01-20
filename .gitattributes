@@ -1,0 +1,18 @@
+# 设置脚本文件的行尾符为LF
+*.sh text eol=lf
+
+# 设置配置文件的行尾符为LF
+*.conf text eol=lf
+*.txt text eol=lf
+*.dts text eol=lf
+*.dtsi text eol=lf
+
+# 设置Makefile的行尾符为LF
+Makefile text eol=lf
+makefile text eol=lf
+
+# 二进制文件
+*.img binary
+*.dtb binary
+*.bin binary
+*.scr binary
