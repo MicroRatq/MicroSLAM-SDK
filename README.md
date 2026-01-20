@@ -1,56 +1,18 @@
 # MicroSLAM 固件编译仓库
 
-这是一个独立的MicroSLAM固件编译仓库，基于 [Armbian Build Framework](https://github.com/armbian/build) 官方仓库，在编译阶段通过userpatches机制引入MicroSLAM配置，实现完全独立的构建流程。
+这是一个独立的MicroSLAM固件编译仓库，基于 [Armbian Build Framework](https://github.com/armbian/build) 官方仓库，实现了 U-Boot、Kernel、RootFS 的独立构建系统，支持精确的增量构建控制。
 
-## 项目结构
+## 1. 核心特性
 
-```
-MicroSLAM-SDK/
-├── .gitignore                    # Git忽略规则
-├── .gitattributes               # Git属性配置
-├── README.md                     # 项目说明文档
-├── docker-compose.yml            # Docker Compose配置
-├── Dockerfile                    # Docker镜像构建文件
-├── configs/                      # MicroSLAM配置文件目录
-│   ├── model_database.conf      # MicroSLAM配置行（参考用）
-│   ├── kernel/                  # 内核相关配置
-│   │   ├── config-6.1           # 内核配置文件
-│   │   └── dts/                 # 设备树文件
-│   │       └── rk3588-microslam.dts
-│   ├── bootfs/                  # 启动文件系统配置
-│   │   ├── armbianEnv.txt
-│   │   ├── boot.cmd
-│   │   └── boot.scr
-│   └── rootfs/                  # 根文件系统配置
-│       └── etc/
-│           └── balance_irq
-├── userpatches/                  # Armbian userpatches配置
-│   ├── config-microslam.conf    # 板卡配置文件
-│   ├── linux-rockchip64-current.config  # 内核配置文件
-│   ├── sources/
-│   │   └── rockchip.conf        # 内核源配置
-│   ├── patch/
-│   │   └── kernel/              # 内核补丁目录
-│   └── customize-image.sh       # 镜像自定义脚本
-├── scripts/                      # 构建脚本目录
-│   ├── init-repos.sh            # 初始化仓库脚本
-│   ├── integrate-dts.sh         # 设备树集成脚本
-│   ├── build.sh                 # 构建固件脚本
-│   └── compile-kernel.sh        # 内核编译脚本
-└── repos/                        # 被引用仓库目录（git忽略）
-    ├── armbian-build/            # Armbian官方构建框架
-    └── linux-6.1.y-rockchip/    # Rockchip内核源码
-```
-
-## 核心特性
-
-- **独立构建**：基于Armbian官方build框架，不依赖amlogic-s9xxx-armbian的rebuild脚本
-- **编译阶段注入**：通过Armbian的userpatches机制，在编译阶段就引入MicroSLAM配置
+- **独立构建系统**：U-Boot、Kernel、RootFS 完全独立构建，互不依赖
+- **增量构建支持**：基于 `make clean`/`make mrproper` 的增量构建机制，支持快速迭代开发
+- **直接模块集成**：Kernel 模块直接使用 `.ko` 文件，无需 deb 包安装
+- **RootFS 缓存**：利用 Armbian artifact 系统的缓存机制，加速 RootFS 构建
 - **完全控制**：所有配置文件都在本仓库管理，便于版本控制和定制
 
-## 快速开始
+## 2. 快速开始
 
-### 1. 初始化仓库
+### 2.1 初始化仓库
 
 首次使用前，需要初始化被引用的仓库：
 
@@ -58,11 +20,12 @@ MicroSLAM-SDK/
 ./scripts/init-repos.sh
 ```
 
-这个脚本会自动clone以下仓库到 `repos/` 目录：
+这个脚本会自动 clone 以下仓库到 `repos/` 目录：
 - `armbian/build` - Armbian官方构建框架
+- `radxa/u-boot` - U-Boot 源码（next-dev-v2024.10 分支）
 - `unifreq/linux-6.1.y-rockchip` - Rockchip内核源码
 
-### 2. 使用Docker环境（推荐）
+### 2.2 使用Docker环境（推荐）
 
 #### 构建Docker镜像
 
@@ -85,30 +48,114 @@ docker compose exec microslam-builder bash
 #### 在容器内编译
 
 ```bash
-# 构建完整固件镜像
+# 默认构建（所有组件增量构建 + 打包）
 ./scripts/build.sh
-
-# 仅编译内核
-./scripts/compile-kernel.sh
 ```
 
-### 3. 本地环境使用
+### 2.3 本地环境使用
 
 如果不想使用Docker，也可以直接在本地环境使用：
 
 ```bash
-# 确保已安装所有依赖（参考Dockerfile中的依赖列表）
-# 然后直接运行脚本
-
 ./scripts/build.sh
-./scripts/compile-kernel.sh
 ```
 
-## 脚本说明
+## 3. 脚本说明
 
-### init-repos.sh
+### 3.1 build.sh
 
-初始化被引用的仓库。如果仓库不存在，会自动从GitHub clone。
+主构建脚本，支持独立构建各个组件或全量构建，提供精细的增量构建控制。
+
+**参数说明：**
+
+| 参数 | 说明 | 默认值 | 可选项 |
+|------|------|--------|--------|
+| `-u` / `-uc` | 构建 U-Boot（`-u` 增量，`-uc` 全量） | 增量 | `-u`（增量）<br>`-uc`（全量） |
+| `-k` / `-kc` | 构建 Kernel（`-k` 增量，`-kc` 全量） | 增量 | `-k`（增量）<br>`-kc`（全量） |
+| `-f` / `-fc` | 构建 RootFS（`-f` 增量，`-fc` 全量） | 增量 | `-f`（增量）<br>`-fc`（全量） |
+| `-p, --package` | 在构建流程最后执行打包 | 自动 | 可选 |
+| `--clean-cache` | 仅清理缓存，不进行构建 | - | 可选 |
+| `-r, --release RELEASE` | 指定 Ubuntu/Debian 版本 | noble | noble, jammy, bookworm 等 |
+| `-b, --branch BRANCH` | 指定 Armbian 分支 | current | current, edge 等 |
+| `--desktop` | 构建桌面版镜像 | no | 可选 |
+| `--minimal` | 构建最小化镜像 | no | 可选 |
+| `-j, --threads N` | 编译线程数 | 自动计算 | 正整数 |
+| `-h, --help` | 显示帮助信息 | - | 可选 |
+
+**注意：**
+- `-u` 和 `-uc` 互斥，`-k` 和 `-kc` 互斥，`-f` 和 `-fc` 互斥
+- 可以任意组合，如 `-u -kc -f`
+- 如果不指定 `-u/-k/-f`，默认构建所有组件且使用增量构建模式
+- 如果构建了所有组件，自动启用打包（无需指定 `-p`）
+
+**输出位置：**
+- U-Boot: `output/uboot/`
+- Kernel: `output/kernel/`
+- RootFS: `output/rootfs/`
+- 镜像: `output/images/`
+
+### 3.2 build-uboot.sh
+
+独立构建 U-Boot，支持增量构建。
+
+**特性：**
+- 自动应用 MicroSLAM 配置（defconfig、DTS、Kconfig、board 目录）
+- 支持增量构建（基于 `make clean`）
+- 自动生成 `u-boot.itb` FIT 镜像
+
+**用法：**
+```bash
+./scripts/build-uboot.sh [-j N] [--incremental]
+```
+
+### 3.3 build-kernel.sh
+
+独立构建 Kernel，支持增量构建。
+
+**特性：**
+- 自动应用 MicroSLAM 设备树文件
+- 支持增量构建（基于 `make mrproper`）
+- 直接安装 `.ko` 模块文件，无需 deb 包
+- 自动打包模块为 `modules-*.tar.gz`
+
+**用法：**
+```bash
+./scripts/build-kernel.sh [-j N] [--incremental]
+```
+
+### 3.4 build-rootfs.sh
+
+独立构建 RootFS，使用 Armbian artifact 系统。
+
+**特性：**
+- 完全跳过 U-Boot 和 Kernel 构建
+- 使用 Armbian artifact 缓存机制加速构建
+- 手动构建必要的 artifact 包
+- 支持桌面版和最小版本
+
+**用法：**
+```bash
+./scripts/build-rootfs.sh [-r RELEASE] [-b BRANCH] [--desktop] [--minimal]
+```
+
+### 3.5 package-image.sh
+
+打包最终镜像，合并独立构建的组件。
+
+**特性：**
+- 合并 U-Boot、Kernel、RootFS 到最终镜像
+- 支持 ext4 和 btrfs 文件系统
+- 自动分区和格式化
+- 直接复制 `.ko` 模块到 RootFS
+
+**用法：**
+```bash
+./scripts/package-image.sh
+```
+
+### 3.6 init-repos.sh
+
+初始化被引用的仓库。如果仓库不存在，会自动从 GitHub clone。
 
 ```bash
 ./scripts/init-repos.sh
@@ -116,138 +163,96 @@ docker compose exec microslam-builder bash
 
 **下载的仓库：**
 - `repos/armbian-build` - Armbian官方构建框架
+- `repos/u-boot-radxa` - Radxa U-Boot 源码
 - `repos/linux-6.1.y-rockchip` - Rockchip内核源码（6.1.y分支）
 
-### integrate-dts.sh
+### 3.7 apply-patches.sh
 
-将MicroSLAM设备树文件集成到内核源码树。这个脚本会：
-1. 复制 `configs/kernel/dts/rk3588-microslam.dts` 到内核源码树
-2. 更新内核源码树中的Makefile，添加dtb构建规则
+应用 MicroSLAM 特定的补丁和配置到源码树。
 
+**功能：**
+- 复制 U-Boot 配置到源码树
+- 复制 Kernel 设备树到源码树
+- 应用必要的补丁
+
+**用法：**
 ```bash
-./scripts/integrate-dts.sh
+./scripts/apply-patches.sh
 ```
 
-### build.sh
+### 3.8 common.sh
 
-构建MicroSLAM固件镜像。这个脚本会：
+公共函数库，包含工具链管理、路径管理、构建输出检查等通用功能。
 
-1. 初始化仓库（如果未初始化）
-2. 集成设备树文件到内核源码树
-3. 准备userpatches配置（复制到armbian-build/userpatches）
-4. 调用 `armbian/build/compile.sh` 进行编译
-5. 在编译阶段通过customize-image.sh注入bootfs和rootfs配置
+## 4. 配置文件说明
 
-```bash
-# 使用默认参数（RELEASE=noble, BRANCH=current）
-./scripts/build.sh
+### 4.1 configs/uboot/
 
-# 指定Ubuntu/Debian版本
-./scripts/build.sh -r jammy
+U-Boot 配置文件目录：
+- `rk3588-microslam_defconfig` - U-Boot 默认配置
+- `dts/rk3588-microslam.dts` - U-Boot 设备树文件
+- `arch/arm/mach-rockchip/rk3588/Kconfig` - Kconfig 配置
+- `board/rockchip/microslam/` - 板卡特定文件
+- `include/configs/microslam.h` - 板卡头文件
 
-# 指定内核分支
-./scripts/build.sh -b edge
+### 4.2 configs/kernel/
 
-# 构建桌面版
-./scripts/build.sh --desktop
-```
+Kernel 配置文件目录：
+- `config-6.1` - 内核配置文件
+- `dts/rk3588-microslam.dts` - 内核设备树文件
 
-**输出位置：** `repos/armbian-build/output/images/`
-
-### compile-kernel.sh
-
-单独编译MicroSLAM内核。这个脚本会：
-
-1. 初始化仓库（如果未初始化）
-2. 集成设备树文件到内核源码树
-3. 准备userpatches配置
-4. 调用 `armbian/build/compile.sh`，仅编译内核
-
-```bash
-# 使用默认参数
-./scripts/compile-kernel.sh
-
-# 指定内核分支
-./scripts/compile-kernel.sh -b edge
-
-# 启用内核配置界面
-./scripts/compile-kernel.sh -c
-```
-
-**输出位置：** `repos/armbian-build/output/debs/`
-
-## 配置文件说明
-
-### userpatches/config-microslam.conf
-
-MicroSLAM板卡配置文件，定义：
-- `BOARD_NAME` - 板卡名称
-- `BOARDFAMILY` - 板卡家族（rk3588）
-- `BOOT_FDT_FILE` - 设备树文件路径
-- `KERNEL_TARGET` - 支持的内核分支
-- 其他板卡特定配置
-
-### userpatches/linux-rockchip64-current.config
-
-内核配置文件，从 `configs/kernel/config-6.1` 复制而来，用于覆盖Armbian默认的内核配置。
-
-### userpatches/sources/rockchip.conf
-
-内核源配置，指定使用 `unifreq/linux-6.1.y-rockchip` 仓库作为内核源码。
-
-### userpatches/customize-image.sh
-
-镜像自定义脚本，在Armbian构建系统的镜像打包前执行，用于：
-- 复制bootfs配置（armbianEnv.txt, boot.cmd等）
-- 复制rootfs配置（balance_irq等）
-- 执行其他自定义操作
-
-### configs/kernel/dts/rk3588-microslam.dts
-
-MicroSLAM设备树主文件，会在构建时自动集成到内核源码树。
-
-### configs/bootfs/
+### 4.3 configs/bootfs/
 
 启动文件系统配置文件：
 - `armbianEnv.txt` - Armbian环境变量配置
 - `boot.cmd` - U-Boot启动脚本
 - `boot.scr` - 编译后的启动脚本
 
-### configs/rootfs/
+### 4.4 configs/rootfs/
 
 根文件系统配置文件：
 - `etc/balance_irq` - IRQ平衡配置
 
-## 构建流程说明
+## 5. 构建流程说明
 
-### 完整构建流程
+### 5.1 独立构建流程
 
-1. **初始化阶段**：下载armbian/build和linux-6.1.y-rockchip仓库
-2. **准备阶段**：
-   - 集成设备树文件到内核源码树
-   - 复制userpatches配置到armbian-build/userpatches
-3. **编译阶段**：
-   - Armbian build系统读取userpatches配置
-   - 使用指定的内核源和配置编译内核
-   - 编译设备树文件
-   - 打包根文件系统
-4. **自定义阶段**：
-   - 执行customize-image.sh注入bootfs和rootfs配置
-5. **输出阶段**：生成最终的.img镜像文件
+1. **U-Boot 构建**：
+   - 初始化 U-Boot 源码（从 `repos/u-boot-radxa`）
+   - 应用 MicroSLAM 配置（defconfig、DTS、Kconfig、board 目录）
+   - 执行 `make clean`（全量构建）或跳过（增量构建）
+   - 编译 U-Boot 并生成 `u-boot.itb` FIT 镜像
+   - 输出到 `output/uboot/`
 
-### 与原有流程的区别
+2. **Kernel 构建**：
+   - 初始化 Kernel 源码（从 `repos/linux-6.1.y-rockchip`）
+   - 应用 MicroSLAM 设备树文件
+   - 执行 `make mrproper`（全量构建）或跳过（增量构建）
+   - 编译内核镜像和设备树
+   - 编译并安装内核模块（`.ko` 文件）
+   - 打包模块为 `modules-*.tar.gz`
+   - 输出到 `output/kernel/`
 
-| 特性 | 原流程（amlogic-s9xxx-armbian） | 新流程（armbian/build） |
-|------|-------------------------------|------------------------|
-| 构建方式 | 使用rebuild脚本，构建后替换文件 | 使用compile.sh，编译阶段注入配置 |
-| 配置文件 | 需要model_database.conf | 使用userpatches配置 |
-| 依赖关系 | 依赖外部rebuild脚本 | 完全独立，仅依赖官方框架 |
-| 设备树处理 | 构建后复制 | 编译时集成到内核源码树 |
-| 内核配置 | 构建后替换 | 编译时使用userpatches覆盖 |
+3. **RootFS 构建**：
+   - 使用 Armbian artifact 系统获取或创建 rootfs cache
+   - 手动构建必要的 artifact 包（fake-ubuntu-advantage-tools、armbian-base-files 等）
+   - 安装发行版特定包和发行版无关包
+   - 应用 MicroSLAM 自定义配置
+   - 打包 rootfs 为 tarball
+   - 输出到 `output/rootfs/`
 
-## Docker环境配置
+4. **镜像打包**：
+   - 创建镜像文件并分区
+   - 写入 U-Boot 到镜像
+   - 复制 Kernel 镜像和设备树到 boot 分区
+   - 解压 RootFS 到根分区
+   - 复制内核模块到 RootFS
+   - 生成最终镜像文件
+   - 输出到 `output/images/`
 
-### 环境变量
+## 6. Docker环境配置
+
+### 6.1 环境变量
 
 可以通过环境变量自定义Docker配置：
 
@@ -262,83 +267,34 @@ export USER_PASSWORD=your_password
 docker compose build
 ```
 
-### 挂载点
+### 6.2 挂载点
 
 - `./` → `/MicroSLAM-SDK` - 项目根目录
 - `./repos` → `/MicroSLAM-SDK/repos` - 被引用仓库目录
+- `./output` → `/MicroSLAM-SDK/output` - 构建输出目录
 
-## 构建参数说明
+### 6.3 Privileged 模式
 
-### build.sh 参数
+Docker 容器以 privileged 模式运行，以支持：
+- 文件系统挂载和分区操作
+- binfmt_misc 配置（用于交叉编译）
+- 其他需要特权权限的操作
 
-- `-r, --release` - 指定Ubuntu/Debian版本（noble, jammy, bookworm等）
-- `-b, --branch` - 指定内核分支（current, edge等）
-- `--desktop` - 构建桌面版镜像
-- `--minimal` - 构建最小化镜像
-
-### compile-kernel.sh 参数
-
-- `-b, --branch` - 指定内核分支
-- `-c, --configure` - 启用内核配置界面
-
-## 注意事项
-
-1. **首次使用**：首次使用前必须运行 `./scripts/init-repos.sh` 初始化仓库。
-
-2. **磁盘空间**：构建过程需要大量磁盘空间（建议至少50GB可用空间）。
-
-3. **构建时间**：完整构建可能需要数小时，取决于硬件性能。
-
-4. **网络要求**：初始化仓库和编译过程需要网络连接以下载依赖和源码。
-
-5. **权限问题**：如果遇到权限问题，确保Docker容器以privileged模式运行（已在docker-compose.yml中配置）。
-
-6. **内核版本匹配**：确保configs/kernel/config-6.1与linux-6.1.y-rockchip内核版本兼容。
-
-## 故障排除
-
-### 仓库初始化失败
-
-如果 `init-repos.sh` 失败，检查：
-- 网络连接是否正常
-- Git是否已安装
-- GitHub访问是否正常
-
-### 设备树集成失败
-
-如果 `integrate-dts.sh` 失败，检查：
-- 内核源码目录是否存在
-- 源设备树文件是否存在
-- 是否有写入权限
-
-### 编译失败
-
-如果编译失败，检查：
-- 所有依赖是否已安装（参考Dockerfile）
-- 磁盘空间是否充足（至少50GB）
-- userpatches配置是否正确
-- 查看构建日志：`repos/armbian-build/output/logs/`
-
-### Docker问题
-
-如果Docker相关操作失败，检查：
-- Docker是否已安装（Docker Compose已集成在Docker中）
-- 是否有足够的权限运行Docker
-- 容器日志：`docker compose logs`
-
-## 参考资源
+## 7. 参考资源
 
 - [Armbian Build Framework](https://github.com/armbian/build) - 官方构建框架
 - [Armbian Documentation](https://docs.armbian.com/) - 官方文档
-- [Armbian User Configurations](https://docs.armbian.com/Developer-Guide_User-Configurations/) - userpatches机制说明
-- [linux-6.1.y-rockchip](https://github.com/unifreq/linux-6.1.y-rockchip) - Rockchip内核源码
+- [Armbian User Configurations](https://docs.armbian.com/Developer-Guide_User-Configurations/) - userpatches 机制说明
+- [linux-6.1.y-rockchip](https://github.com/unifreq/linux-6.1.y-rockchip) - Rockchip 内核源码
+- [Radxa U-Boot](https://github.com/radxa/u-boot) - Radxa U-Boot 源码
 
-## 许可证
+## 8. 许可证
 
 本项目基于以下项目：
 - [armbian/build](https://github.com/armbian/build) - GPL-2.0
 - [linux-6.1.y-rockchip](https://github.com/unifreq/linux-6.1.y-rockchip) - GPL-2.0
+- [radxa/u-boot](https://github.com/radxa/u-boot) - GPL-2.0
 
-## 贡献
+## 9. 贡献
 
-欢迎提交Issue和Pull Request。
+欢迎提交 Issue 和 Pull Request。

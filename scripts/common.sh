@@ -271,7 +271,7 @@ parse_incremental_args() {
 
 # 解析线程数参数
 parse_threads_args() {
-    local default_threads="${CPUTHREADS:-$(nproc)}"
+    local default_threads="${CPUTHREADS:-$(calculate_optimal_threads)}"
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -288,5 +288,52 @@ parse_threads_args() {
     
     if [ -z "${CPUTHREADS}" ]; then
         export CPUTHREADS="${default_threads}"
+    fi
+}
+
+#================================================================================================
+# 编译线程数优化函数
+#================================================================================================
+
+# 计算最优编译线程数
+# 策略：max(1, min(nproc - 2, nproc * 0.8))
+# 避免 14 代 CPU 默认情况下的段错误
+calculate_optimal_threads() {
+    local nproc_count
+    
+    if command -v nproc >/dev/null 2>&1; then
+        nproc_count=$(nproc)
+    elif [ -f /proc/cpuinfo ]; then
+        nproc_count=$(grep -c "^processor" /proc/cpuinfo)
+    else
+        echo 1
+        return
+    fi
+    
+    if [ -z "${nproc_count}" ] || [ "${nproc_count}" -lt 1 ]; then
+        echo 1
+        return
+    fi
+    
+    # 计算 nproc - 2
+    local thread1=$((nproc_count - 2))
+    
+    # 计算 nproc * 0.8（使用 bc 或纯 bash）
+    local thread2
+    if command -v bc >/dev/null 2>&1; then
+        thread2=$(echo "scale=0; ${nproc_count} * 0.8 / 1" | bc)
+    else
+        # 纯 bash 实现：nproc * 0.8 = (nproc * 8) / 10
+        thread2=$((nproc_count * 8 / 10))
+    fi
+    
+    # 取较小值
+    local optimal=$((thread1 < thread2 ? thread1 : thread2))
+    
+    # 确保至少为 1
+    if [ "${optimal}" -lt 1 ]; then
+        echo 1
+    else
+        echo "${optimal}"
     fi
 }

@@ -30,6 +30,7 @@ RELEASE="${RELEASE:-noble}"
 BRANCH="${BRANCH:-current}"
 BUILD_DESKTOP="${BUILD_DESKTOP:-no}"
 BUILD_MINIMAL="${BUILD_MINIMAL:-no}"
+INCREMENTAL_BUILD_ROOTFS="${INCREMENTAL_BUILD_ROOTFS:-yes}"
 
 # 解析命令行参数
 while [[ $# -gt 0 ]]; do
@@ -177,6 +178,15 @@ assert_requires_aggregation  # 确保 aggregation 已运行（会生成 AGGREGAT
 # 注意：不要在这里调用 calculate_rootfs_cache_id，让 artifact 系统在 artifact_rootfs_prepare_version 中调用
 
 # 11. 使用 artifact 系统获取或创建 rootfs cache（自动检查缓存）
+# 如果 INCREMENTAL_BUILD_ROOTFS="no"（即 -fc），强制全量构建，清理 rootfs 缓存
+if [ "${INCREMENTAL_BUILD_ROOTFS}" = "no" ]; then
+    echo -e "${INFO} 强制全量构建：清理 rootfs 缓存..."
+    if [ -d "${ARMBIAN_DIR}/cache/rootfs" ]; then
+        rm -rf "${ARMBIAN_DIR}/cache/rootfs"/*
+        echo -e "${SUCCESS} Rootfs 缓存已清理"
+    fi
+fi
+
 # get_or_create_rootfs_cache_chroot_sdcard 会：
 # - 调用 WHAT="rootfs" build_artifact_for_image（自动检查缓存，如果存在则使用，不存在则创建）
 # - 调用 prepare_rootfs_build_params_and_trap（设置清理处理器）
