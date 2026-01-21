@@ -311,6 +311,27 @@ echo -e "${INFO} 分配的 loop 设备: ${LOOP_DEV}"
 echo -e "${INFO} 运行 partprobe 识别分区..."
 partprobe "${LOOP_DEV}" || true
 
+# 等待分区设备节点创建（Docker 容器环境可能需要手动创建）
+sleep 2
+
+# 检查并创建分区设备节点（Docker 容器环境问题修复）
+LOOP_BASE=$(basename "${LOOP_DEV}")
+if [ ! -b "${LOOP_DEV}p1" ] || [ ! -b "${LOOP_DEV}p2" ]; then
+    # 从 /proc/partitions 读取主次设备号并创建分区设备节点
+    for part in p1 p2; do
+        if [ ! -b "${LOOP_DEV}${part}" ]; then
+            PART_INFO=$(grep "${LOOP_BASE}${part}" /proc/partitions 2>/dev/null | awk '{print $1, $2}')
+            if [ -n "${PART_INFO}" ]; then
+                MAJOR=$(echo "${PART_INFO}" | awk '{print $1}')
+                MINOR=$(echo "${PART_INFO}" | awk '{print $2}')
+                if [ -n "${MAJOR}" ] && [ -n "${MINOR}" ]; then
+                    mknod "${LOOP_DEV}${part}" b "${MAJOR}" "${MINOR}" 2>/dev/null || true
+                fi
+            fi
+        fi
+    done
+fi
+
 # 格式化boot分区（ext4）
 echo -e "${INFO} 格式化boot分区..."
 mkfs.ext4 -F -L "BOOT" "${LOOP_DEV}p1"
@@ -323,7 +344,43 @@ else
     mkfs.ext4 -F -L "ROOTFS" "${LOOP_DEV}p2"
 fi
 
-# 8. 挂载分区并复制文件
+# 8. 写入U-Boot到镜像开头（在挂载分区之前，参考 amlogic-s9xxx-armbian-new/rebuild）
+# 参考 rebuild 脚本的 Rockchip 平台写入逻辑
+echo -e "${INFO} 写入U-Boot到镜像开头..."
+BOOTLOADER_IMG="idbloader.img"
+MAINLINE_UBOOT="u-boot.itb"
+TRUST_IMG=""
+
+# 检查文件是否存在
+if [ -f "${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" ] && [ -f "${UBOOT_OUTPUT}/${MAINLINE_UBOOT}" ] && [ -n "${TRUST_IMG}" ] && [ -f "${UBOOT_OUTPUT}/${TRUST_IMG}" ]; then
+    # 情况1: 有 BOOTLOADER_IMG、MAINLINE_UBOOT 和 TRUST_IMG
+    echo -e "${INFO} 写入 bootloader: ${BOOTLOADER_IMG}, ${MAINLINE_UBOOT}, ${TRUST_IMG}"
+    dd if="${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 seek=64 2>/dev/null
+    dd if="${UBOOT_OUTPUT}/${MAINLINE_UBOOT}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 seek=16384 2>/dev/null
+    dd if="${UBOOT_OUTPUT}/${TRUST_IMG}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 seek=24576 2>/dev/null
+    echo -e "${SUCCESS} bootloader 写入成功（idbloader: 64, u-boot: 16384, trust: 24576 扇区）"
+elif [ -f "${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" ] && [ -f "${UBOOT_OUTPUT}/${MAINLINE_UBOOT}" ]; then
+    # 情况2: 有 BOOTLOADER_IMG 和 MAINLINE_UBOOT（microslam 使用此情况）
+    echo -e "${INFO} 写入 bootloader: ${BOOTLOADER_IMG}, ${MAINLINE_UBOOT}"
+    dd if="${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 seek=64 2>/dev/null
+    dd if="${UBOOT_OUTPUT}/${MAINLINE_UBOOT}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 seek=16384 2>/dev/null
+    echo -e "${SUCCESS} bootloader 写入成功（idbloader: 64, u-boot: 16384 扇区）"
+elif [ "${BOOTLOADER_IMG}" == "u-boot-rockchip.bin" ] && [ -f "${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" ]; then
+    # 情况3: BOOTLOADER_IMG 是 u-boot-rockchip.bin
+    echo -e "${INFO} 写入 bootloader: ${BOOTLOADER_IMG}"
+    dd if="${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 seek=64 2>/dev/null
+    echo -e "${SUCCESS} bootloader 写入成功（偏移 64 扇区）"
+elif [ -f "${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" ]; then
+    # 情况4: 只有 BOOTLOADER_IMG
+    echo -e "${INFO} 写入 bootloader: ${BOOTLOADER_IMG} (skip=64)"
+    dd if="${UBOOT_OUTPUT}/${BOOTLOADER_IMG}" of="${LOOP_DEV}" conv=fsync,notrunc bs=512 skip=64 seek=64 2>/dev/null
+    echo -e "${SUCCESS} bootloader 写入成功（skip=64, seek=64 扇区）"
+else
+    echo -e "${ERROR} 未找到 bootloader 文件: ${UBOOT_OUTPUT}/${BOOTLOADER_IMG}"
+    exit 1
+fi
+
+# 9. 挂载分区并复制文件
 echo -e "${INFO} 挂载分区..."
 
 # 挂载boot分区
@@ -347,17 +404,6 @@ cp -rf "${BOOTFS_TMP}"/* "${BOOT_MOUNT}/"
 # 复制rootfs内容
 echo -e "${INFO} 复制rootfs内容..."
 cp -a "${ROOTFS_TMP}"/* "${ROOT_MOUNT}/"
-
-# 9. 写入U-Boot到镜像开头
-echo -e "${INFO} 写入U-Boot到镜像开头..."
-if [ -f "${UBOOT_OUTPUT}/idbloader.img" ]; then
-    dd if="${UBOOT_OUTPUT}/idbloader.img" of="${LOOP_DEV}" bs=512 seek=64 conv=notrunc status=progress
-fi
-
-if [ -f "${UBOOT_OUTPUT}/u-boot.itb" ]; then
-    # 查找u-boot.itb的写入位置（通常是在idbloader之后）
-    dd if="${UBOOT_OUTPUT}/u-boot.itb" of="${LOOP_DEV}" bs=512 seek=16384 conv=notrunc status=progress
-fi
 
 # 10. 卸载分区
 echo -e "${INFO} 卸载分区..."
