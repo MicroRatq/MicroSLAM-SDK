@@ -73,7 +73,7 @@ docker compose exec microslam-builder bash
 | `-u` / `-uc` | 构建 U-Boot（`-u` 增量，`-uc` 全量） | 增量 | `-u`（增量）<br>`-uc`（全量） |
 | `-k` / `-kc` | 构建 Kernel（`-k` 增量，`-kc` 全量） | 增量 | `-k`（增量）<br>`-kc`（全量） |
 | `-f` / `-fc` | 构建 RootFS（`-f` 增量，`-fc` 全量） | 增量 | `-f`（增量）<br>`-fc`（全量） |
-| `-p, --package` | 在构建流程最后执行打包 | 自动 | 可选 |
+| `-p, --package` | 仅打包镜像（不构建），需要所有组件缓存存在 | - | 可选 |
 | `--clean-cache` | 仅清理缓存，不进行构建 | - | 可选 |
 | `-r, --release RELEASE` | 指定 Ubuntu/Debian 版本 | noble | noble, jammy, bookworm 等 |
 | `-b, --branch BRANCH` | 指定 Armbian 分支 | current | current, edge 等 |
@@ -85,8 +85,11 @@ docker compose exec microslam-builder bash
 **注意：**
 - `-u` 和 `-uc` 互斥，`-k` 和 `-kc` 互斥，`-f` 和 `-fc` 互斥
 - 可以任意组合，如 `-u -kc -f`
-- 如果不指定 `-u/-k/-f`，默认构建所有组件且使用增量构建模式
+- 如果不指定 `-u/-k/-f`：
+  - 如果指定了 `-p`：仅打包，使用所有组件缓存（缓存不存在则报错）
+  - 如果未指定 `-p`：默认构建所有组件且使用增量构建模式，并自动打包
 - 如果构建了所有组件，自动启用打包（无需指定 `-p`）
+- 如果指定了 `-p` 但某个组件未构建，会检查该组件的缓存是否存在，不存在则报错退出
 
 **输出位置：**
 - U-Boot: `output/uboot/`
@@ -145,8 +148,10 @@ docker compose exec microslam-builder bash
 **特性：**
 - 合并 U-Boot、Kernel、RootFS 到最终镜像
 - 支持 ext4 和 btrfs 文件系统
-- 自动分区和格式化
+- 自动分区和格式化（参考 Armbian 实现）
 - 直接复制 `.ko` 模块到 RootFS
+- 自动清理 loop 设备和挂载点（使用 trap 机制）
+- 使用 `wait_for_disk_sync` 确保磁盘同步
 
 **用法：**
 ```bash

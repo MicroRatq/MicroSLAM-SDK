@@ -117,7 +117,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -kc             全量构建 Kernel"
             echo "  -f              增量构建 RootFS"
             echo "  -fc             全量构建 RootFS"
-            echo "  -p, --package   在构建流程最后执行打包"
+            echo "  -p, --package   仅打包镜像（不构建），需要所有组件缓存存在"
             echo "  --clean-cache   仅清理缓存，不进行构建"
             echo "  -r, --release RELEASE  Armbian发布版本（默认: noble）"
             echo "  -b, --branch BRANCH    Armbian分支（默认: current）"
@@ -131,6 +131,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 -u                   # 仅增量构建 U-Boot"
             echo "  $0 -uc                  # 仅全量构建 U-Boot"
             echo "  $0 -u -kc -f            # U-Boot 增量，Kernel 全量，RootFS 增量"
+            echo "  $0 -p                   # 仅打包（使用所有组件缓存）"
             echo "  $0 -u -p                # 增量构建 U-Boot，使用 Kernel 和 RootFS 缓存打包"
             echo "  $0 --clean-cache        # 清理所有缓存"
             echo "  $0 -u --clean-cache     # 仅清理 U-Boot 缓存"
@@ -288,16 +289,22 @@ if [ "${CLEAN_ONLY}" = "yes" ]; then
     exit 0
 fi
 
-# 默认行为：如果 -u/-k/-f 都不存在，默认构建所有组件且使用增量构建
+# 默认行为处理
 if [ "${BUILD_UBOOT}" = "no" ] && [ "${BUILD_KERNEL}" = "no" ] && [ "${BUILD_ROOTFS}" = "no" ]; then
-    BUILD_UBOOT="yes"
-    BUILD_KERNEL="yes"
-    BUILD_ROOTFS="yes"
-    INCREMENTAL_BUILD_UBOOT="yes"
-    INCREMENTAL_BUILD_KERNEL="yes"
-    INCREMENTAL_BUILD_ROOTFS="yes"
-    BUILD_PACKAGE="yes"  # 默认情况下自动打包
-    echo -e "${INFO} 默认构建模式：将构建所有组件（增量）并打包镜像"
+    if [ "${BUILD_PACKAGE}" = "yes" ]; then
+        # 如果指定了 -p 但没有指定任何构建参数，则仅打包（不构建）
+        echo -e "${INFO} 仅打包模式：将使用缓存进行打包，不进行构建"
+    else
+        # 如果既没有构建参数也没有 -p，默认构建所有组件且使用增量构建
+        BUILD_UBOOT="yes"
+        BUILD_KERNEL="yes"
+        BUILD_ROOTFS="yes"
+        INCREMENTAL_BUILD_UBOOT="yes"
+        INCREMENTAL_BUILD_KERNEL="yes"
+        INCREMENTAL_BUILD_ROOTFS="yes"
+        BUILD_PACKAGE="yes"  # 默认情况下自动打包
+        echo -e "${INFO} 默认构建模式：将构建所有组件（增量）并打包镜像"
+    fi
 fi
 
 # 如果构建了所有组件，自动启用打包（除非明确指定了 -p）
@@ -399,33 +406,43 @@ if [ "${BUILD_PACKAGE}" = "yes" ]; then
     # 检查所有必要的输出（如果某个组件未构建，检查缓存是否存在）
     missing_components=()
     
+    # 检查 U-Boot
     if [ "${BUILD_UBOOT}" = "no" ]; then
         if ! check_build_outputs "uboot" "${PROJECT_ROOT}" 2>/dev/null; then
             missing_components+=("U-Boot")
+        else
+            echo -e "${SUCCESS} U-Boot 缓存存在"
         fi
     else
         check_build_outputs "uboot" "${PROJECT_ROOT}" || exit 1
     fi
     
+    # 检查 Kernel
     if [ "${BUILD_KERNEL}" = "no" ]; then
         if ! check_build_outputs "kernel" "${PROJECT_ROOT}" 2>/dev/null; then
             missing_components+=("Kernel")
+        else
+            echo -e "${SUCCESS} Kernel 缓存存在"
         fi
     else
         check_build_outputs "kernel" "${PROJECT_ROOT}" || exit 1
     fi
     
+    # 检查 RootFS
     if [ "${BUILD_ROOTFS}" = "no" ]; then
         if ! check_build_outputs "rootfs" "${PROJECT_ROOT}" 2>/dev/null; then
             missing_components+=("RootFS")
+        else
+            echo -e "${SUCCESS} RootFS 缓存存在"
         fi
     else
         check_build_outputs "rootfs" "${PROJECT_ROOT}" || exit 1
     fi
     
+    # 如果缺少任何组件，报错退出
     if [ ${#missing_components[@]} -gt 0 ]; then
         echo -e "${ERROR} 打包失败：以下组件的缓存不存在: ${missing_components[*]}"
-        echo -e "${ERROR} 请先构建这些组件或使用 --clean-cache 清理后重新构建"
+        echo -e "${ERROR} 请先构建这些组件（使用 -u/-k/-f 参数）"
         exit 1
     fi
     

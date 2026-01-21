@@ -13,6 +13,25 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# 清理函数：卸载分区和删除 loop 设备
+cleanup_loop_device() {
+    if [ -n "${LOOP_DEV}" ] && [ -b "${LOOP_DEV}" ] 2>/dev/null; then
+        echo -e "${INFO} 清理 loop 设备: ${LOOP_DEV}"
+        # 尝试卸载所有挂载点
+        if [ -n "${BOOT_MOUNT}" ] && mountpoint -q "${BOOT_MOUNT}" 2>/dev/null; then
+            umount "${BOOT_MOUNT}" 2>/dev/null || true
+        fi
+        if [ -n "${ROOT_MOUNT}" ] && mountpoint -q "${ROOT_MOUNT}" 2>/dev/null; then
+            umount "${ROOT_MOUNT}" 2>/dev/null || true
+        fi
+        # 删除 loop 设备
+        losetup -d "${LOOP_DEV}" 2>/dev/null || true
+    fi
+}
+
+# 设置 trap：在脚本退出时清理
+trap cleanup_loop_device EXIT INT TERM
+
 # 路径配置
 UBOOT_OUTPUT="${PROJECT_ROOT}/output/uboot"
 KERNEL_OUTPUT="${PROJECT_ROOT}/output/kernel"
@@ -194,20 +213,103 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# 确保使用绝对路径（参考 Armbian，直接使用变量，但确保是绝对路径）
+if [[ "${IMG_FILE}" != /* ]]; then
+    IMG_FILE="$(cd "$(dirname "${IMG_FILE}")" && pwd)/$(basename "${IMG_FILE}")"
+fi
+
+# 检查文件是否存在
+if [ ! -f "${IMG_FILE}" ]; then
+    echo -e "${ERROR} 镜像文件不存在: ${IMG_FILE}"
+    exit 1
+fi
+
+# 验证文件可读
+if [ ! -r "${IMG_FILE}" ]; then
+    echo -e "${ERROR} 镜像文件不可读: ${IMG_FILE}"
+    exit 1
+fi
+
+# wait_for_disk_sync 函数（参考 Armbian）
+wait_for_disk_sync() {
+    local timeout_seconds=30
+    local sync_worked=0
+    local sync_timeout_count=0
+    local total_wait=0
+
+    while [ ${sync_worked} -eq 0 ]; do
+        local sync_timeout=0
+        if bash -c "timeout --signal=9 ${timeout_seconds} sync &> /dev/null" &> /dev/null; then
+            sync_worked=1
+        else
+            sync_timeout=1
+        fi
+        
+        if [ ${sync_timeout} -eq 1 ]; then
+            total_wait=$((total_wait + timeout_seconds))
+            sync_timeout_count=$((sync_timeout_count + 1))
+            echo -e "${WARNING} 等待磁盘同步 $* (已等待 ${total_wait} 秒)..."
+        fi
+    done
+}
+
+# 同步文件系统，确保文件完全写入（参考 Armbian）
+wait_for_disk_sync "after creating image file"
+
 # 7. 分区和格式化
 echo -e "${INFO} 创建分区表..."
-LOOP_DEV=$(losetup -f)
-losetup -P "${LOOP_DEV}" "${IMG_FILE}"
+# 参考 Armbian: 先在镜像文件上创建分区表，然后使用 losetup --partscan 创建 loop 设备
+# 使用 sfdisk 直接在镜像文件上创建分区表（更可靠）
+{
+    echo "label: gpt"
+    echo "1 : start=${SKIP_MB}MiB, size=${BOOT_MB}MiB, type=BC13C2FF-59E6-4262-A352-B275FD6F7172, name=\"bootfs\""
+    echo "2 : start=$((SKIP_MB + BOOT_MB))MiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name=\"rootfs\""
+} | sfdisk "${IMG_FILE}" || {
+    echo -e "${ERROR} 创建分区表失败"
+    exit 1
+}
 
-# 创建GPT分区表
-parted -s "${LOOP_DEV}" mklabel gpt
-parted -s "${LOOP_DEV}" unit MiB mkpart primary ${SKIP_MB} $((SKIP_MB + BOOT_MB))
-parted -s "${LOOP_DEV}" unit MiB mkpart primary $((SKIP_MB + BOOT_MB)) 100%
+# 等待磁盘同步（参考 Armbian，在创建分区表后）
+wait_for_disk_sync "after creating partition table"
 
-# 等待分区设备就绪
-sleep 2
+# 使用 --partscan 创建 loop 设备，强制内核扫描分区表
+# 参考 Armbian: 使用 flock 锁定 loop 设备访问
+exec {FD}> /var/lock/armbian-debootstrap-losetup 2>/dev/null || true
+if [ -n "${FD}" ]; then
+    flock -x ${FD} 2>/dev/null || true
+fi
+
+# 检查 sfdisk 版本（参考 Armbian）
+sfdisk_version=$(sfdisk --version 2>&1 | awk '/util-linux/ {print $NF}' || echo "0.0.0")
+sfdisk_version_num=$(echo "${sfdisk_version}" | awk -F. '{printf "%d%02d%02d\n", $1, $2, $3}')
+
+# 创建 loop 设备（参考 Armbian 的实现）
+declare LOOP_DEV
+if [ "${sfdisk_version_num}" -ge "24100" ]; then
+    # 使用 -b 参数指定扇区大小（如果支持）
+    LOOP_DEV=$(losetup --show --partscan --find -b 512 "${IMG_FILE}" 2>&1) || {
+        echo -e "${ERROR} 无法创建 loop 设备: ${IMG_FILE}"
+        echo -e "${INFO} losetup 错误: $(losetup --show --partscan --find -b 512 "${IMG_FILE}" 2>&1)"
+        [ -n "${FD}" ] && flock -u ${FD} 2>/dev/null || true
+        exit 1
+    }
+else
+    LOOP_DEV=$(losetup --show --partscan --find "${IMG_FILE}" 2>&1) || {
+        echo -e "${ERROR} 无法创建 loop 设备: ${IMG_FILE}"
+        echo -e "${INFO} losetup 错误: $(losetup --show --partscan --find "${IMG_FILE}" 2>&1)"
+        [ -n "${FD}" ] && flock -u ${FD} 2>/dev/null || true
+        exit 1
+    }
+fi
+
+# 解锁
+[ -n "${FD}" ] && flock -u ${FD} 2>/dev/null || true
+
+echo -e "${INFO} 分配的 loop 设备: ${LOOP_DEV}"
+
+# 运行 partprobe（参考 Armbian）
+echo -e "${INFO} 运行 partprobe 识别分区..."
 partprobe "${LOOP_DEV}" || true
-sleep 1
 
 # 格式化boot分区（ext4）
 echo -e "${INFO} 格式化boot分区..."
@@ -262,7 +364,12 @@ echo -e "${INFO} 卸载分区..."
 sync
 umount "${BOOT_MOUNT}" || true
 umount "${ROOT_MOUNT}" || true
-losetup -d "${LOOP_DEV}" || true
+
+# 清理 loop 设备（trap 也会处理，但这里显式清理以确保顺序）
+cleanup_loop_device
+
+# 移除 trap，因为已经清理完成
+trap - EXIT INT TERM
 
 # 11. 清理临时文件
 echo -e "${INFO} 清理临时文件..."
