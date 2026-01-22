@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
- * (C) Copyright 2022 FriendlyElec Computer Tech. Co., Ltd.
- * (http://www.friendlyelec.com)
- *
  * Copyright (c) 2021 Rockchip Electronics Co., Ltd
+ *
  */
 
 /dts-v1/;
@@ -11,32 +9,153 @@
 #include "rk3588-u-boot.dtsi"
 #include <dt-bindings/input/input.h>
 
-
 / {
-	model = "MicroSLAM - Rockchip RK3588";
-    	compatible = "rockchip,rk3588";
+	model = "MicroSLAM";
+	compatible = "microslam,microslam", "rockchip,rk3588";
 
-        aliases {
-                mmc0 = &sdhci;
-                mmc1 = &sdmmc;
-        };
+	vcc12v_dcin: vcc12v-dcin {
+		u-boot,dm-pre-reloc;
+		compatible = "regulator-fixed";
+		regulator-name = "vcc12v_dcin";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <12000000>;
+		regulator-max-microvolt = <12000000>;
+	};
 
-        chosen {
-                stdout-path = &uart6;
-                u-boot,spl-boot-order = &sdmmc, &sdhci, &spi_nand, &spi_nor;
-        };
+	vcc5v0_sys: vcc5v0-sys {
+		u-boot,dm-pre-reloc;
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&vcc12v_dcin>;
+	};
 
-        secure-otp@fe3a0000 {
-                u-boot,dm-spl;
-                compatible = "rockchip,rk3588-secure-otp";
-                reg = <0x0 0xfe3a0000 0x0 0x4000>;
-        };
+	vcc_5v0: vcc-5v0 {
+		u-boot,dm-pre-reloc;
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_5v0";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-boot-on;
+		regulator-always-on;
+		enable-active-high;
+		gpio = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&vcc_5v0_en>;
+		vin-supply = <&vcc5v0_sys>;
+	};
+
+	vcc5v0_host: vcc5v0-host-regulator {
+		u-boot,dm-pre-reloc;
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_host";
+		regulator-boot-on;
+		regulator-always-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+		gpio = <&gpio4 RK_PB5 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&vcc5v0_host_en>;
+		vin-supply = <&vcc5v0_sys>;
+	};
+
+	vcc3v3_pcie30: vcc3v3-pcie30 {
+		u-boot,dm-pre-reloc;
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_pcie30";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		enable-active-high;
+		gpio = <&gpio2 RK_PC5 GPIO_ACTIVE_HIGH>;
+		regulator-boot-on;
+		regulator-always-on;
+		startup-delay-us = <50000>;
+		vin-supply = <&vcc5v0_sys>;
+	};
+
+	led_sys: led-sys {
+		u-boot,dm-pre-reloc;
+		compatible = "regulator-fixed";
+		regulator-name = "led_sys";
+		enable-active-high;
+		gpio = <&gpio1 RK_PC1 GPIO_ACTIVE_HIGH>; // Turn on user led
+		regulator-boot-on;
+		regulator-always-on;
+		vin-supply = <&vcc5v0_sys>;
+	};
 };
 
-&uart6 {
-  	pinctrl-names = "default";
-  	pinctrl-0 = <&uart6m0_xfer>; /* 需与 linux 的 pinctrl 同步 */
-  	u-boot,dm-spl;     /* SPL 阶段激活 pinmux 和时钟 */
-  	status = "okay";
-  	clock-frequency = <1500000>; /* SPL 可识别的波特 */
+&pcie3x4 {
+	u-boot,dm-pre-reloc;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
+	status = "okay";
+};
+
+&pcie30phy {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};
+
+&combphy0_ps {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};
+
+&combphy2_psu {
+	u-boot,dm-pre-reloc;
+	status = "okay";
+};
+
+&usb2phy0_grf {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};
+
+&u2phy0 {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};
+
+&u2phy0_otg {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};
+
+&usb2phy2_grf {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};
+
+&u2phy2 {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};
+
+&u2phy2_host {
+	status = "okay";
+	u-boot,dm-pre-reloc;
+};
+
+&pinctrl {
+	usb {
+		u-boot,dm-pre-reloc;
+		vcc5v0_host_en: vcc5v0-host-en {
+			u-boot,dm-pre-reloc;
+			rockchip,pins = <4 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	power {
+		u-boot,dm-spl;
+		vcc_5v0_en: vcc-5v0-en {
+			u-boot,dm-spl;
+			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
 };

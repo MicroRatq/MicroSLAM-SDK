@@ -14,6 +14,8 @@ setenv rootfstype "ext4"
 setenv rootflags "rw,errors=remount-ro"
 setenv docker_optimizations "on"
 setenv earlycon "off"
+# Set prefix to root path if not already set
+if test -z "${prefix}"; then setenv prefix "/"; fi
 
 echo "Boot script loaded from ${devtype} ${devnum}"
 

@@ -101,8 +101,8 @@ export LOCALVERSION=""
 
 # 5. 准备输出目录
 echo -e "${INFO} 准备输出目录..."
-rm -rf "${OUTPUT_DIR}"/{boot/,dtb/,modules/,header/}
-mkdir -p "${OUTPUT_DIR}"/{boot/,dtb/rockchip/,modules/,header/}
+rm -rf "${OUTPUT_DIR}"/{boot/,dtb/,modules/,header/,packages/}
+mkdir -p "${OUTPUT_DIR}"/{boot/,dtb/rockchip/,modules/,header/,packages/}
 
 # 6. 进入Kernel源码目录
 cd "${KERNEL_DIR}"
@@ -133,6 +133,16 @@ fi
 
 # 10. 清除内核签名
 sed -i "s|CONFIG_LOCALVERSION=.*|CONFIG_LOCALVERSION=\"\"|" .config
+
+# 10.5. 使用 olddefconfig 生成完整配置（参考 Armbian 方法）
+# 这将基于现有配置和内核默认值填充所有缺失的配置项，避免交互式提示
+echo -e "${INFO} 使用 olddefconfig 生成完整配置..."
+make ${MAKE_SET_STRING} olddefconfig
+if [ $? -ne 0 ]; then
+    echo -e "${WARNING} olddefconfig 执行失败，继续构建..."
+else
+    echo -e "${SUCCESS} 配置已更新为完整配置"
+fi
 
 # 11. 复制DTS文件（如果需要）
 if [ -d "${CONFIGS_DIR}/kernel/dts" ]; then
@@ -183,6 +193,15 @@ if command -v ${CROSS_COMPILE}strip >/dev/null 2>&1; then
     echo -e "${SUCCESS} 模块调试信息已去除"
 fi
 
+# 15.5. 安装内核头文件（参考 amlogic-s9xxx-armbian-new）
+echo -e "${INFO} 安装内核头文件..."
+make ${MAKE_SET_STRING} headers_install INSTALL_HDR_PATH="${OUTPUT_DIR}/header"
+if [ $? -ne 0 ]; then
+    echo -e "${WARNING} 内核头文件安装失败，继续构建..."
+else
+    echo -e "${SUCCESS} 内核头文件安装成功"
+fi
+
 # 16. 获取内核版本名称
 KERNEL_OUTNAME=$(ls -1 "${OUTPUT_DIR}/modules/lib/modules/" 2>/dev/null | head -1)
 if [ -z "${KERNEL_OUTNAME}" ]; then
@@ -191,14 +210,156 @@ if [ -z "${KERNEL_OUTNAME}" ]; then
 fi
 echo -e "${INFO} 内核版本名称: ${KERNEL_OUTNAME}"
 
-# 17. 复制内核镜像
+# 17. 复制内核镜像和相关文件到 boot 目录（参考 amlogic-s9xxx-armbian-new）
 if [ -f "arch/${ARCH}/boot/Image" ]; then
-    cp -f "arch/${ARCH}/boot/Image" "${OUTPUT_DIR}/boot/Image"
+    # 复制 Image 和 vmlinuz（参考第 698 行）
     cp -f "arch/${ARCH}/boot/Image" "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}"
+    cp -f "arch/${ARCH}/boot/Image" "${OUTPUT_DIR}/boot/Image"
     echo -e "${SUCCESS} 复制内核镜像完成"
 else
     echo -e "${ERROR} 未找到内核镜像: arch/${ARCH}/boot/Image"
     exit 1
+fi
+
+# 17.5. 复制内核配置文件和 System.map（参考第 696-697 行）
+if [ -f "System.map" ]; then
+    cp -f "System.map" "${OUTPUT_DIR}/boot/System.map-${KERNEL_OUTNAME}"
+    echo -e "${SUCCESS} 复制 System.map 完成"
+fi
+
+if [ -f ".config" ]; then
+    cp -f ".config" "${OUTPUT_DIR}/boot/config-${KERNEL_OUTNAME}"
+    echo -e "${SUCCESS} 复制内核配置文件完成"
+fi
+
+# 17.6. 生成 uInitrd 和 initrd.img（可选，如果系统支持 update-initramfs）
+# 注意：在交叉编译环境中，这通常需要目标系统的 rootfs
+# 如果无法生成，boot.cmd 已经支持可选加载 uInitrd
+# 在 Docker 容器内，需要先安装 initramfs-tools 和 u-boot-tools
+echo -e "${INFO} 检查 uInitrd 生成环境..."
+
+# 检查并安装 initramfs-tools（如果需要）
+if ! command -v update-initramfs >/dev/null 2>&1; then
+    echo -e "${INFO} update-initramfs 不存在，尝试安装 initramfs-tools..."
+    if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+        sudo apt-get update -qq >/dev/null 2>&1
+        sudo apt-get install -y initramfs-tools >/dev/null 2>&1 || echo -e "${WARNING} 无法安装 initramfs-tools"
+    fi
+fi
+
+# 检查并安装 u-boot-tools（如果需要，用于 mkimage）
+if ! command -v mkimage >/dev/null 2>&1; then
+    echo -e "${INFO} mkimage 不存在，尝试安装 u-boot-tools..."
+    if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+        sudo apt-get install -y u-boot-tools >/dev/null 2>&1 || echo -e "${WARNING} 无法安装 u-boot-tools"
+    fi
+fi
+
+if command -v update-initramfs >/dev/null 2>&1 && command -v mkimage >/dev/null 2>&1; then
+    echo -e "${INFO} 尝试生成 uInitrd 和 initrd.img..."
+    
+    # 确保必要目录存在（使用 sudo）
+    if command -v sudo >/dev/null 2>&1; then
+        sudo mkdir -p /boot /usr/lib/modules
+    else
+        mkdir -p /boot /usr/lib/modules
+    fi
+    
+    # 备份当前 /boot 文件
+    BOOT_BACKUP="/tmp/boot_backup_$$"
+    mkdir -p "${BOOT_BACKUP}"
+    if command -v sudo >/dev/null 2>&1; then
+        sudo mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} "${BOOT_BACKUP}/" 2>/dev/null || true
+    else
+        mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} "${BOOT_BACKUP}/" 2>/dev/null || true
+    fi
+    
+    # 复制文件到 /boot（使用 sudo）
+    if command -v sudo >/dev/null 2>&1; then
+        sudo cp -f "${OUTPUT_DIR}/boot/System.map-${KERNEL_OUTNAME}" /boot/System.map-${KERNEL_OUTNAME}
+        sudo cp -f "${OUTPUT_DIR}/boot/config-${KERNEL_OUTNAME}" /boot/config-${KERNEL_OUTNAME}
+        sudo cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/vmlinuz-${KERNEL_OUTNAME}
+        sudo cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/Image
+    else
+        cp -f "${OUTPUT_DIR}/boot/System.map-${KERNEL_OUTNAME}" /boot/System.map-${KERNEL_OUTNAME}
+        cp -f "${OUTPUT_DIR}/boot/config-${KERNEL_OUTNAME}" /boot/config-${KERNEL_OUTNAME}
+        cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/vmlinuz-${KERNEL_OUTNAME}
+        cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/Image
+    fi
+    
+    # 复制模块到 /usr/lib/modules（使用 sudo）
+    MODULES_BACKUP="/tmp/modules_backup_$$"
+    mkdir -p "${MODULES_BACKUP}"
+    if command -v sudo >/dev/null 2>&1; then
+        sudo mv -f /usr/lib/modules/$(uname -r) "${MODULES_BACKUP}/" 2>/dev/null || true
+        sudo mkdir -p /usr/lib/modules
+        sudo cp -rf "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" /usr/lib/modules/
+    else
+        mv -f /usr/lib/modules/$(uname -r) "${MODULES_BACKUP}/" 2>/dev/null || true
+        mkdir -p /usr/lib/modules
+        cp -rf "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" /usr/lib/modules/
+    fi
+    
+    # 生成 initrd.img（使用 sudo）
+    cd /boot
+    if command -v sudo >/dev/null 2>&1; then
+        sudo update-initramfs -c -k ${KERNEL_OUTNAME} 2>&1 | grep -v "^W:" || echo -e "${WARNING} update-initramfs 执行失败，跳过 uInitrd 生成"
+    else
+        update-initramfs -c -k ${KERNEL_OUTNAME} 2>&1 | grep -v "^W:" || echo -e "${WARNING} update-initramfs 执行失败，跳过 uInitrd 生成"
+    fi
+    
+    # 使用 mkimage 将 initrd.img 转换为 uInitrd（使用 sudo）
+    if [ -f "initrd.img-${KERNEL_OUTNAME}" ]; then
+        echo -e "${INFO} 将 initrd.img 转换为 uInitrd..."
+        if command -v sudo >/dev/null 2>&1; then
+            sudo mkimage -A arm64 -O linux -T ramdisk -C none -a 0 -e 0 \
+                -n initramfs-${KERNEL_OUTNAME} -d initrd.img-${KERNEL_OUTNAME} \
+                uInitrd-${KERNEL_OUTNAME} >/dev/null 2>&1
+        else
+            mkimage -A arm64 -O linux -T ramdisk -C none -a 0 -e 0 \
+                -n initramfs-${KERNEL_OUTNAME} -d initrd.img-${KERNEL_OUTNAME} \
+                uInitrd-${KERNEL_OUTNAME} >/dev/null 2>&1
+        fi
+        
+        if [ -f "uInitrd-${KERNEL_OUTNAME}" ]; then
+            echo -e "${SUCCESS} uInitrd 生成成功"
+        else
+            echo -e "${WARNING} uInitrd 转换失败"
+        fi
+    fi
+    
+    # 复制生成的 uInitrd 和 initrd.img 回输出目录（使用 sudo）
+    if [ -f "uInitrd-${KERNEL_OUTNAME}" ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            sudo cp -f uInitrd-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
+        else
+            cp -f uInitrd-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
+        fi
+    fi
+    if [ -f "initrd.img-${KERNEL_OUTNAME}" ]; then
+        if command -v sudo >/dev/null 2>&1; then
+            sudo cp -f initrd.img-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
+        else
+            cp -f initrd.img-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
+        fi
+    fi
+    
+    # 恢复 /boot 和 /usr/lib/modules（使用 sudo）
+    if command -v sudo >/dev/null 2>&1; then
+        sudo mv -f *${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
+        sudo mv -f "${BOOT_BACKUP}"/* /boot/ 2>/dev/null || true
+        sudo rm -rf /usr/lib/modules/${KERNEL_OUTNAME}
+        sudo mv -f "${MODULES_BACKUP}"/* /usr/lib/modules/ 2>/dev/null || true
+    else
+        mv -f *${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
+        mv -f "${BOOT_BACKUP}"/* /boot/ 2>/dev/null || true
+        rm -rf /usr/lib/modules/${KERNEL_OUTNAME}
+        mv -f "${MODULES_BACKUP}"/* /usr/lib/modules/ 2>/dev/null || true
+    fi
+    rm -rf "${BOOT_BACKUP}" "${MODULES_BACKUP}"
+    cd - > /dev/null
+else
+    echo -e "${WARNING} 无法生成 uInitrd（需要 update-initramfs 和 mkimage），boot.cmd 已支持可选加载"
 fi
 
 # 18. 复制设备树文件
@@ -211,13 +372,69 @@ if [ -d "arch/${ARCH}/boot/dts/rockchip" ]; then
     echo -e "${SUCCESS} 复制设备树文件完成"
 fi
 
-# 19. 可选：打包模块（便于传输和缓存）
+# 19. 打包内核文件（参考 amlogic-s9xxx-armbian-new 格式）
+echo -e "${INFO} 开始打包内核文件..."
+PACKAGE_DIR="${OUTPUT_DIR}/packages/${KERNEL_OUTNAME}"
+mkdir -p "${PACKAGE_DIR}"
+
+# 19.1. 打包 boot 文件（参考 amlogic-s9xxx-armbian-new 第 808-813 行）
+echo -e "${INFO} 打包 boot 文件..."
+cd "${OUTPUT_DIR}/boot"
+# 移除可能的 dtb-* 文件（参考第 809 行）
+rm -rf dtb-* 2>/dev/null || true
+# 设置可执行权限（参考第 810 行）
+chmod +x * 2>/dev/null || true
+# 打包所有文件（参考第 811 行）
+if [ "$(ls -A . 2>/dev/null)" ]; then
+    tar -czf "${PACKAGE_DIR}/boot-${KERNEL_OUTNAME}.tar.gz" *
+    echo -e "${SUCCESS} boot 文件打包完成: boot-${KERNEL_OUTNAME}.tar.gz"
+else
+    echo -e "${WARNING} boot 目录为空，跳过打包"
+fi
+
+# 19.2. 打包 dtb 文件
+echo -e "${INFO} 打包 dtb 文件..."
+if [ -d "${OUTPUT_DIR}/dtb/rockchip" ] && [ "$(ls -A ${OUTPUT_DIR}/dtb/rockchip 2>/dev/null)" ]; then
+    cd "${OUTPUT_DIR}/dtb"
+    tar -czf "${PACKAGE_DIR}/dtb-rockchip-${KERNEL_OUTNAME}.tar.gz" rockchip/
+    echo -e "${SUCCESS} dtb 文件打包完成: dtb-rockchip-${KERNEL_OUTNAME}.tar.gz"
+else
+    echo -e "${WARNING} 未找到 dtb 文件，跳过打包"
+fi
+
+# 19.3. 打包 modules 文件
+echo -e "${INFO} 打包 modules 文件..."
 if [ -d "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" ]; then
-    echo -e "${INFO} 打包内核模块..."
     cd "${OUTPUT_DIR}/modules"
-    tar -czf "${OUTPUT_DIR}/modules-${KERNEL_OUTNAME}.tar.gz" lib/modules/${KERNEL_OUTNAME}
+    tar -czf "${PACKAGE_DIR}/modules-${KERNEL_OUTNAME}.tar.gz" lib/modules/${KERNEL_OUTNAME}/
+    echo -e "${SUCCESS} modules 文件打包完成: modules-${KERNEL_OUTNAME}.tar.gz"
+else
+    echo -e "${WARNING} 未找到 modules 文件，跳过打包"
+fi
+
+# 19.4. 打包 header 文件（参考 amlogic-s9xxx-armbian-new 第 820-823 行）
+echo -e "${INFO} 打包 header 文件..."
+# make headers_install 会在 INSTALL_HDR_PATH 下创建 usr/include 等目录
+# 参考实现直接打包 header 目录的所有内容
+if [ -d "${OUTPUT_DIR}/header" ] && [ "$(ls -A ${OUTPUT_DIR}/header 2>/dev/null)" ]; then
+    cd "${OUTPUT_DIR}/header"
+    tar -czf "${PACKAGE_DIR}/header-${KERNEL_OUTNAME}.tar.gz" *
+    echo -e "${SUCCESS} header 文件打包完成: header-${KERNEL_OUTNAME}.tar.gz"
+else
+    echo -e "${WARNING} 未找到 header 文件，跳过打包"
+fi
+
+cd - > /dev/null
+
+# 19.5. 生成 sha256sums 文件
+echo -e "${INFO} 生成 sha256sums 文件..."
+if [ -d "${PACKAGE_DIR}" ] && [ "$(ls -A ${PACKAGE_DIR}/*.tar.gz 2>/dev/null)" ]; then
+    cd "${PACKAGE_DIR}"
+    sha256sum *.tar.gz > sha256sums 2>/dev/null || true
+    echo -e "${SUCCESS} sha256sums 文件生成完成"
     cd - > /dev/null
-    echo -e "${SUCCESS} 模块打包完成: modules-${KERNEL_OUTNAME}.tar.gz"
+else
+    echo -e "${WARNING} 未找到打包文件，跳过 sha256sums 生成"
 fi
 
 # 20. 检查输出
@@ -228,6 +445,13 @@ if [ -f "${OUTPUT_DIR}/boot/Image" ] && [ -d "${OUTPUT_DIR}/modules/lib/modules/
     echo -e "${INFO} 内核镜像: ${OUTPUT_DIR}/boot/Image"
     echo -e "${INFO} 设备树文件: ${OUTPUT_DIR}/dtb/rockchip/"
     echo -e "${INFO} 内核模块: ${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}/"
+    if [ -d "${OUTPUT_DIR}/header" ] && [ "$(ls -A ${OUTPUT_DIR}/header 2>/dev/null)" ]; then
+        echo -e "${INFO} 内核头文件: ${OUTPUT_DIR}/header/"
+    fi
+    if [ -d "${PACKAGE_DIR}" ]; then
+        echo -e "${INFO} 打包文件: ${PACKAGE_DIR}/"
+        ls -lh "${PACKAGE_DIR}"/*.tar.gz 2>/dev/null | head -5 || true
+    fi
     ls -lh "${OUTPUT_DIR}/boot/Image" 2>/dev/null || true
     ls -lh "${OUTPUT_DIR}/dtb/rockchip"/*.dtb 2>/dev/null | head -5 || true
     echo -e "${INFO} 模块数量: $(find "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" -name "*.ko" | wc -l)"

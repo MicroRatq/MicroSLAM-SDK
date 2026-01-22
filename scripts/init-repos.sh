@@ -19,7 +19,9 @@ KERNEL_REPO="https://github.com/unifreq/linux-6.1.y-rockchip.git"
 KERNEL_DIR="${PROJECT_ROOT}/repos/linux-6.1.y-rockchip"
 UBOOT_REPO="https://github.com/radxa/u-boot.git"
 UBOOT_BRANCH="next-dev-v2024.10"
-UBOOT_DIR="${PROJECT_ROOT}/repos/u-boot-radxa"
+UBOOT_DIR="${PROJECT_ROOT}/repos/u-boot"
+RKBIN_REPO="https://github.com/armbian/rkbin.git"
+RKBIN_DIR="${PROJECT_ROOT}/repos/rkbin"
 
 # 颜色输出
 STEPS="[\033[95m STEPS \033[0m]"
@@ -30,8 +32,8 @@ ERROR="[\033[91m ERROR \033[0m]"
 echo -e "${STEPS} 开始初始化仓库..."
 
 # 创建repos目录
-    mkdir -p "${PROJECT_ROOT}/repos"
-    cd "${PROJECT_ROOT}/repos"
+mkdir -p "${PROJECT_ROOT}/repos"
+cd "${PROJECT_ROOT}/repos"
 
 # 检查并clone armbian/build仓库
 if [ ! -d "${ARMBIAN_DIR}" ]; then
@@ -61,18 +63,32 @@ else
     echo -e "${INFO} linux-6.1.y-rockchip 仓库已存在，跳过clone"
 fi
 
-# 检查并clone u-boot-radxa仓库
+# 检查并clone u-boot仓库
 if [ ! -d "${UBOOT_DIR}" ]; then
-    echo -e "${INFO} u-boot-radxa 仓库不存在，开始clone..."
-    git clone --depth=1 --branch="${UBOOT_BRANCH}" "${UBOOT_REPO}" u-boot-radxa
+    echo -e "${INFO} u-boot 仓库不存在，开始clone..."
+    git clone --depth=1 --branch="${UBOOT_BRANCH}" "${UBOOT_REPO}" u-boot
     if [ $? -eq 0 ]; then
-        echo -e "${SUCCESS} u-boot-radxa 仓库clone完成"
+        echo -e "${SUCCESS} u-boot 仓库clone完成"
     else
-        echo -e "${ERROR} u-boot-radxa 仓库clone失败"
+        echo -e "${ERROR} u-boot 仓库clone失败"
         exit 1
     fi
 else
-    echo -e "${INFO} u-boot-radxa 仓库已存在，跳过clone"
+    echo -e "${INFO} u-boot 仓库已存在，跳过clone"
+fi
+
+# 检查并clone rkbin仓库
+if [ ! -d "${RKBIN_DIR}" ]; then
+    echo -e "${INFO} rkbin 仓库不存在，开始clone..."
+    git clone "${RKBIN_REPO}" rkbin
+    if [ $? -eq 0 ]; then
+        echo -e "${SUCCESS} rkbin 仓库clone完成"
+    else
+        echo -e "${ERROR} rkbin 仓库clone失败"
+        exit 1
+    fi
+else
+    echo -e "${INFO} rkbin 仓库已存在，跳过clone"
 fi
 
 echo -e "${SUCCESS} 仓库初始化完成"

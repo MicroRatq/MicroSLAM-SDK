@@ -210,14 +210,14 @@ if [ "${CLEAN_ONLY}" = "yes" ]; then
             echo -e "${SUCCESS} armbian-build 仓库已重置"
         fi
         
-        # 重置 u-boot-radxa
-        if [ -d "${PROJECT_ROOT}/repos/u-boot-radxa/.git" ]; then
-            cd "${PROJECT_ROOT}/repos/u-boot-radxa"
+        # 重置 u-boot
+        if [ -d "${PROJECT_ROOT}/repos/u-boot/.git" ]; then
+            cd "${PROJECT_ROOT}/repos/u-boot"
             git fetch origin 2>/dev/null || true
             current_branch=$(git branch --show-current 2>/dev/null || echo "next-dev-v2024.10")
             git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
             git clean -fd 2>/dev/null || true
-            echo -e "${SUCCESS} u-boot-radxa 仓库已重置"
+            echo -e "${SUCCESS} u-boot 仓库已重置"
         fi
         
         # 重置 linux-6.1.y-rockchip
@@ -237,13 +237,13 @@ if [ "${CLEAN_ONLY}" = "yes" ]; then
                 rm -rf "${OUTPUT_DIR}/uboot"/*
                 echo -e "${SUCCESS} U-Boot 输出目录已清理"
             fi
-            if [ -d "${PROJECT_ROOT}/repos/u-boot-radxa/.git" ]; then
-                cd "${PROJECT_ROOT}/repos/u-boot-radxa"
+            if [ -d "${PROJECT_ROOT}/repos/u-boot/.git" ]; then
+                cd "${PROJECT_ROOT}/repos/u-boot"
                 git fetch origin 2>/dev/null || true
                 current_branch=$(git branch --show-current 2>/dev/null || echo "next-dev-v2024.10")
                 git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
                 git clean -fd 2>/dev/null || true
-                echo -e "${SUCCESS} u-boot-radxa 仓库已重置"
+                echo -e "${SUCCESS} u-boot 仓库已重置"
             fi
         fi
         
@@ -350,7 +350,7 @@ if [ "${BUILD_UBOOT}" = "yes" ]; then
         echo -e "${ERROR} U-Boot构建失败"
         exit 1
     fi
-    
+
     # 检查输出
     check_build_outputs "uboot" "${PROJECT_ROOT}" || exit 1
 fi
@@ -427,7 +427,7 @@ if [ "${BUILD_PACKAGE}" = "yes" ]; then
     else
         check_build_outputs "kernel" "${PROJECT_ROOT}" || exit 1
     fi
-    
+
     # 检查 RootFS
     if [ "${BUILD_ROOTFS}" = "no" ]; then
         if ! check_build_outputs "rootfs" "${PROJECT_ROOT}" 2>/dev/null; then

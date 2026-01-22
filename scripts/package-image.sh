@@ -177,12 +177,25 @@ if [ -f "${CONFIGS_DIR}/bootfs/armbianEnv.txt" ]; then
     cp -f "${CONFIGS_DIR}/bootfs/armbianEnv.txt" "${BOOTFS_TMP}/"
 fi
 
-if [ -f "${CONFIGS_DIR}/bootfs/boot.scr" ]; then
-    cp -f "${CONFIGS_DIR}/bootfs/boot.scr" "${BOOTFS_TMP}/"
+# 编译 boot.cmd 为 boot.scr（如果 boot.cmd 存在且比 boot.scr 新，或 boot.scr 不存在）
+if [ -f "${CONFIGS_DIR}/bootfs/boot.cmd" ]; then
+    if [ ! -f "${CONFIGS_DIR}/bootfs/boot.scr" ] || [ "${CONFIGS_DIR}/bootfs/boot.cmd" -nt "${CONFIGS_DIR}/bootfs/boot.scr" ]; then
+        if command -v mkimage >/dev/null 2>&1; then
+            echo -e "${INFO} 编译 boot.cmd 为 boot.scr..."
+            mkimage -C none -A arm -T script -n 'flatmax load script' -d "${CONFIGS_DIR}/bootfs/boot.cmd" "${CONFIGS_DIR}/bootfs/boot.scr" || {
+                echo -e "${WARNING} 编译 boot.scr 失败，将使用现有的 boot.scr（如果存在）"
+            }
+        else
+            echo -e "${WARNING} mkimage 未找到，无法编译 boot.scr，将使用现有的 boot.scr（如果存在）"
+        fi
+    fi
+    # 复制 boot.cmd（用于调试）
+    cp -f "${CONFIGS_DIR}/bootfs/boot.cmd" "${BOOTFS_TMP}/"
 fi
 
-if [ -f "${CONFIGS_DIR}/bootfs/boot.cmd" ]; then
-    cp -f "${CONFIGS_DIR}/bootfs/boot.cmd" "${BOOTFS_TMP}/"
+# 复制 boot.scr（如果存在）
+if [ -f "${CONFIGS_DIR}/bootfs/boot.scr" ]; then
+    cp -f "${CONFIGS_DIR}/bootfs/boot.scr" "${BOOTFS_TMP}/"
 fi
 
 echo -e "${SUCCESS} Boot分区内容准备完成"

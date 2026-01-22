@@ -16,8 +16,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # 路径配置
 UBOOT_REPO="https://github.com/radxa/u-boot.git"
 UBOOT_BRANCH="next-dev-v2024.10"
-UBOOT_DIR="${PROJECT_ROOT}/repos/u-boot-radxa"
+UBOOT_DIR="${PROJECT_ROOT}/repos/u-boot"
 ARMBIAN_DIR="${PROJECT_ROOT}/repos/armbian-build"
+RKBIN_DIR="${PROJECT_ROOT}/repos/rkbin"
 CONFIGS_DIR="${PROJECT_ROOT}/configs"
 OUTPUT_DIR="${PROJECT_ROOT}/output/uboot"
 
@@ -115,11 +116,30 @@ else
     echo -e "${INFO} 使用指定的交叉编译工具链: ${CROSS_COMPILE}"
 fi
 
-# 3. 应用MicroSLAM配置
-echo -e "${INFO} 应用MicroSLAM配置..."
+# 3. 检查 rkbin 目录
+echo -e "${INFO} 检查 rkbin 目录..."
+if [ ! -d "${RKBIN_DIR}" ]; then
+    echo -e "${ERROR} rkbin 目录不存在: ${RKBIN_DIR}"
+    echo -e "${ERROR} 请先运行 ./scripts/init-repos.sh 初始化仓库"
+    exit 1
+fi
+echo -e "${SUCCESS} rkbin 目录检查通过"
+
+# 4. 应用 ddrbin_param.txt 配置
+echo -e "${INFO} 应用 ddrbin_param.txt 配置..."
+if [ -f "${CONFIGS_DIR}/rkbin/ddrbin_param.txt" ]; then
+    mkdir -p "${RKBIN_DIR}/tools"
+    cp -f "${CONFIGS_DIR}/rkbin/ddrbin_param.txt" "${RKBIN_DIR}/tools/ddrbin_param.txt"
+    echo -e "${SUCCESS} ddrbin_param.txt 配置已应用"
+else
+    echo -e "${WARNING} 未找到 ddrbin_param.txt 配置文件: ${CONFIGS_DIR}/rkbin/ddrbin_param.txt"
+fi
+
+# 5. 应用U-Boot配置（基于 nanopct6，最小化结构）
+echo -e "${INFO} 应用U-Boot配置..."
 cd "${UBOOT_DIR}"
 
-# 3.1 复制defconfig
+# 5.1 复制defconfig
 if [ -f "${CONFIGS_DIR}/uboot/rk3588-microslam_defconfig" ]; then
     cp -f "${CONFIGS_DIR}/uboot/rk3588-microslam_defconfig" "${UBOOT_DIR}/configs/rk3588-microslam_defconfig"
     echo -e "${SUCCESS} 复制defconfig完成"
@@ -128,42 +148,23 @@ else
     exit 1
 fi
 
-# 3.2 复制头文件
-if [ -f "${CONFIGS_DIR}/uboot/include/configs/microslam.h" ]; then
-    mkdir -p "${UBOOT_DIR}/include/configs"
-    cp -f "${CONFIGS_DIR}/uboot/include/configs/microslam.h" "${UBOOT_DIR}/include/configs/microslam.h"
-    echo -e "${SUCCESS} 复制头文件完成"
-fi
-
-# 3.3 复制board目录
-if [ -d "${CONFIGS_DIR}/uboot/board/rockchip/microslam" ]; then
-    mkdir -p "${UBOOT_DIR}/board/rockchip/microslam"
-    cp -rf "${CONFIGS_DIR}/uboot/board/rockchip/microslam"/* "${UBOOT_DIR}/board/rockchip/microslam/"
-    echo -e "${SUCCESS} 复制board目录完成"
-fi
-
-# 3.4 复制DTS文件
+# 5.2 复制DTS文件
 if [ -f "${CONFIGS_DIR}/uboot/dts/rk3588-microslam.dts" ]; then
     mkdir -p "${UBOOT_DIR}/arch/arm/dts"
     cp -f "${CONFIGS_DIR}/uboot/dts/rk3588-microslam.dts" "${UBOOT_DIR}/arch/arm/dts/rk3588-microslam.dts"
     echo -e "${SUCCESS} 复制DTS文件完成"
+else
+    echo -e "${WARNING} 未找到DTS文件: ${CONFIGS_DIR}/uboot/dts/rk3588-microslam.dts"
 fi
 
-# 3.5 复制Kconfig修改
-if [ -f "${CONFIGS_DIR}/uboot/arch/arm/mach-rockchip/rk3588/Kconfig" ]; then
-    mkdir -p "${UBOOT_DIR}/arch/arm/mach-rockchip/rk3588"
-    cp -f "${CONFIGS_DIR}/uboot/arch/arm/mach-rockchip/rk3588/Kconfig" "${UBOOT_DIR}/arch/arm/mach-rockchip/rk3588/Kconfig"
-    echo -e "${SUCCESS} 复制Kconfig完成"
-fi
-
-# 4. 应用Armbian的U-Boot patch（如果存在）
+# 6. 应用Armbian的U-Boot patch（如果存在）
 if [ -d "${ARMBIAN_DIR}/patch/u-boot/legacy/u-boot-radxa-rk35xx" ]; then
     echo -e "${INFO} 应用Armbian U-Boot patch..."
     # 这里可以添加patch应用逻辑，如果需要的话
     # 目前配置已经通过复制文件的方式应用了
 fi
 
-# 5. 增量构建判断
+# 7. 增量构建判断
 if [ "${INCREMENTAL_BUILD_UBOOT}" != "yes" ]; then
     echo -e "${INFO} 全量构建：执行 make clean"
     make CROSS_COMPILE=${CROSS_COMPILE} clean || true
@@ -171,7 +172,7 @@ else
     echo -e "${INFO} 增量构建：跳过 make clean"
 fi
 
-# 6. 配置U-Boot
+# 8. 配置U-Boot
 echo -e "${INFO} 配置U-Boot..."
 make CROSS_COMPILE=${CROSS_COMPILE} rk3588-microslam_defconfig
 if [ $? -ne 0 ]; then
@@ -179,7 +180,32 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 7. 编译U-Boot
+# 9. 准备 BL31 固件（用于生成 u-boot.itb）
+echo -e "${INFO} 准备 BL31 固件..."
+cd "${UBOOT_DIR}"
+
+# 查找 rkbin 中的 BL31 文件（与 nanopct6 一致，使用 v1.48，如果不存在则使用最新版本）
+# 注意：Armbian rkbin 仓库结构是 rk35/ 而不是 bin/rk35/
+BL31_ELF=$(find "${RKBIN_DIR}/rk35" -name "rk3588_bl31_v1.48.elf" 2>/dev/null | head -1)
+
+# 如果 v1.48 不存在，尝试查找最新版本
+if [ -z "${BL31_ELF}" ] || [ ! -f "${BL31_ELF}" ]; then
+    BL31_ELF=$(find "${RKBIN_DIR}/rk35" -name "rk3588_bl31_*.elf" 2>/dev/null | sort -V | tail -1)
+fi
+
+if [ -z "${BL31_ELF}" ] || [ ! -f "${BL31_ELF}" ]; then
+    echo -e "${ERROR} 未找到 BL31 固件: ${RKBIN_DIR}/rk35/rk3588_bl31_*.elf"
+    echo -e "${ERROR} 请检查 rkbin 仓库是否正确初始化"
+    echo -e "${ERROR} 期望的 BL31 版本: rk3588_bl31_v1.48.elf (与 nanopct6 一致)"
+    echo -e "${ERROR} 如果 v1.48 不存在，将使用最新可用版本"
+    exit 1
+fi
+
+# 复制 BL31 文件到 U-Boot 目录（decode_bl31.py 需要 bl31.elf）
+cp -f "${BL31_ELF}" "${UBOOT_DIR}/bl31.elf"
+echo -e "${SUCCESS} BL31 固件已准备: ${BL31_ELF}"
+
+# 10. 编译U-Boot
 echo -e "${INFO} 开始编译U-Boot（线程数: ${CPUTHREADS}）..."
 make CROSS_COMPILE=${CROSS_COMPILE} -j${CPUTHREADS}
 if [ $? -ne 0 ]; then
@@ -187,14 +213,53 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# 7.5 生成u-boot.itb（FIT镜像）
+# 11. 生成u-boot.itb（FIT镜像）
 echo -e "${INFO} 生成 u-boot.itb..."
 make CROSS_COMPILE=${CROSS_COMPILE} u-boot.itb
 if [ $? -ne 0 ]; then
     echo -e "${WARNING} u-boot.itb 生成失败，继续..."
 fi
 
-# 8. 生成输出文件
+# 12. 生成 idbloader.img（使用 rkbin 的 ddr.bin 和 spl.bin）
+echo -e "${INFO} 生成 idbloader.img..."
+cd "${UBOOT_DIR}"
+
+# 查找 rkbin 中的 ddr.bin 和 spl.bin
+# 注意：Armbian rkbin 仓库结构是 rk35/ 而不是 bin/rk35/
+DDR_BIN=$(find "${RKBIN_DIR}/rk35" -name "rk3588_ddr_*.bin" 2>/dev/null | grep -v eyescan | head -1)
+SPL_BIN=$(find "${RKBIN_DIR}/rk35" -name "rk3588_spl_*.bin" 2>/dev/null | head -1)
+
+if [ -z "${DDR_BIN}" ] || [ -z "${SPL_BIN}" ]; then
+    echo -e "${ERROR} 未找到 rkbin 的 ddr.bin 或 spl.bin"
+    echo -e "${ERROR} 请检查 rkbin 仓库是否正确初始化: ${RKBIN_DIR}/rk35/"
+    if [ -z "${DDR_BIN}" ]; then
+        echo -e "${ERROR} 未找到 ddr.bin 文件"
+    fi
+    if [ -z "${SPL_BIN}" ]; then
+        echo -e "${ERROR} 未找到 spl.bin 文件"
+    fi
+    exit 1
+fi
+
+echo -e "${INFO} 使用 rkbin 的 ddr.bin 和 spl.bin"
+echo -e "${INFO} DDR bin: ${DDR_BIN}"
+echo -e "${INFO} SPL bin: ${SPL_BIN}"
+
+# 使用 U-Boot 的 mkimage 工具生成 idbloader.img（使用 : 分隔符一次性生成）
+if [ ! -f "${UBOOT_DIR}/tools/mkimage" ]; then
+    echo -e "${ERROR} 未找到 mkimage 工具: ${UBOOT_DIR}/tools/mkimage"
+    exit 1
+fi
+
+"${UBOOT_DIR}/tools/mkimage" -T rksd -n rk3588 -d "${DDR_BIN}:${SPL_BIN}" idbloader.img
+if [ $? -ne 0 ]; then
+    echo -e "${ERROR} 生成 idbloader.img 失败"
+    exit 1
+fi
+
+echo -e "${SUCCESS} idbloader.img 生成成功"
+
+# 13. 生成输出文件
 echo -e "${INFO} 生成输出文件..."
 mkdir -p "${OUTPUT_DIR}"
 
@@ -204,22 +269,13 @@ if [ -f "${UBOOT_DIR}/u-boot.itb" ]; then
     echo -e "${SUCCESS} 复制 u-boot.itb 到 ${OUTPUT_DIR}"
 fi
 
-# 查找idbloader.img（可能在tools目录或其他位置）
+# 复制 idbloader.img（如果已生成）
 if [ -f "${UBOOT_DIR}/idbloader.img" ]; then
     cp -f "${UBOOT_DIR}/idbloader.img" "${OUTPUT_DIR}/idbloader.img"
     echo -e "${SUCCESS} 复制 idbloader.img 到 ${OUTPUT_DIR}"
 fi
 
-# 查找其他可能的输出文件
-for file in "${UBOOT_DIR}"/*.img "${UBOOT_DIR}"/*.bin; do
-    if [ -f "${file}" ]; then
-        filename=$(basename "${file}")
-        cp -f "${file}" "${OUTPUT_DIR}/${filename}"
-        echo -e "${INFO} 复制 ${filename} 到 ${OUTPUT_DIR}"
-    fi
-done
-
-# 9. 检查输出
+# 12. 检查输出
 if [ -f "${OUTPUT_DIR}/u-boot.itb" ]; then
     echo -e "${SUCCESS} U-Boot构建完成！"
     echo -e "${INFO} 输出文件位置: ${OUTPUT_DIR}"
