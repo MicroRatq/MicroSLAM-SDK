@@ -155,13 +155,55 @@ echo -e "${SUCCESS} Kernel模块复制完成"
 # 5. 准备boot分区内容
 echo -e "${INFO} 准备boot分区内容..."
 BOOTFS_TMP="${TMP_DIR}/bootfs"
-mkdir -p "${BOOTFS_TMP}"/{dtb/rockchip,overlay-user}
+mkdir -p "${BOOTFS_TMP}"/{dtb/rockchip,overlay-user,extlinux}
 
+# 5.1. 复制内核文件（参考 rebuild 第857行）
+echo -e "${INFO} 复制内核文件..."
 # 复制内核镜像
-cp -f "${KERNEL_OUTPUT}/boot/Image" "${BOOTFS_TMP}/Image"
-cp -f "${KERNEL_OUTPUT}/boot/Image" "${BOOTFS_TMP}/vmlinuz-${KERNEL_NAME}"
+if [ -f "${KERNEL_OUTPUT}/boot/Image" ]; then
+    cp -f "${KERNEL_OUTPUT}/boot/Image" "${BOOTFS_TMP}/vmlinuz-${KERNEL_NAME}"
+    # 创建符号链接（参考 rebuild 第860行，rockchip 平台使用符号链接）
+    ln -sf "vmlinuz-${KERNEL_NAME}" "${BOOTFS_TMP}/Image"
+    echo -e "${SUCCESS} 内核镜像已复制: vmlinuz-${KERNEL_NAME} -> Image"
+else
+    echo -e "${ERROR} 未找到内核镜像: ${KERNEL_OUTPUT}/boot/Image"
+    exit 1
+fi
 
-# 复制设备树文件
+# 复制 System.map
+if [ -f "${KERNEL_OUTPUT}/boot/System.map-${KERNEL_NAME}" ]; then
+    cp -f "${KERNEL_OUTPUT}/boot/System.map-${KERNEL_NAME}" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} System.map 已复制"
+fi
+
+# 复制内核配置文件
+if [ -f "${KERNEL_OUTPUT}/boot/config-${KERNEL_NAME}" ]; then
+    cp -f "${KERNEL_OUTPUT}/boot/config-${KERNEL_NAME}" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} 内核配置文件已复制"
+fi
+
+# 复制 initrd.img
+if [ -f "${KERNEL_OUTPUT}/boot/initrd.img-${KERNEL_NAME}" ]; then
+    cp -f "${KERNEL_OUTPUT}/boot/initrd.img-${KERNEL_NAME}" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} initrd.img 已复制"
+fi
+
+# 复制 uInitrd 并创建符号链接（参考 rebuild 第860行）
+if [ -f "${KERNEL_OUTPUT}/boot/uInitrd-${KERNEL_NAME}" ]; then
+    cp -f "${KERNEL_OUTPUT}/boot/uInitrd-${KERNEL_NAME}" "${BOOTFS_TMP}/"
+    # 创建符号链接（参考 rebuild 第860行）
+    ln -sf "uInitrd-${KERNEL_NAME}" "${BOOTFS_TMP}/uInitrd"
+    echo -e "${SUCCESS} uInitrd 已复制并创建符号链接"
+elif [ -f "${KERNEL_OUTPUT}/boot/uInitrd" ]; then
+    cp -f "${KERNEL_OUTPUT}/boot/uInitrd" "${BOOTFS_TMP}/uInitrd-${KERNEL_NAME}"
+    ln -sf "uInitrd-${KERNEL_NAME}" "${BOOTFS_TMP}/uInitrd"
+    echo -e "${SUCCESS} uInitrd 已复制并创建符号链接"
+else
+    echo -e "${WARNING} 未找到 uInitrd 文件，boot.cmd 已支持可选加载"
+fi
+
+# 5.2. 复制设备树文件
+echo -e "${INFO} 复制设备树文件..."
 if [ -d "${KERNEL_OUTPUT}/dtb/rockchip" ]; then
     cp -f "${KERNEL_OUTPUT}/dtb/rockchip"/*.dtb "${BOOTFS_TMP}/dtb/rockchip/" 2>/dev/null || true
     if [ -d "${KERNEL_OUTPUT}/dtb/rockchip/overlay" ]; then
@@ -170,11 +212,16 @@ if [ -d "${KERNEL_OUTPUT}/dtb/rockchip" ]; then
     fi
     # 创建符号链接（参考 rebuild 第867行）
     ln -sf dtb "${BOOTFS_TMP}/dtb-${KERNEL_NAME}"
+    echo -e "${SUCCESS} 设备树文件已复制"
+else
+    echo -e "${WARNING} 未找到设备树文件目录"
 fi
 
-# 复制boot配置文件
+# 5.3. 复制 boot 配置文件
+echo -e "${INFO} 复制 boot 配置文件..."
 if [ -f "${CONFIGS_DIR}/bootfs/armbianEnv.txt" ]; then
     cp -f "${CONFIGS_DIR}/bootfs/armbianEnv.txt" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} armbianEnv.txt 已复制"
 fi
 
 # 编译 boot.cmd 为 boot.scr（如果 boot.cmd 存在且比 boot.scr 新，或 boot.scr 不存在）
@@ -191,11 +238,48 @@ if [ -f "${CONFIGS_DIR}/bootfs/boot.cmd" ]; then
     fi
     # 复制 boot.cmd（用于调试）
     cp -f "${CONFIGS_DIR}/bootfs/boot.cmd" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} boot.cmd 已复制"
 fi
 
 # 复制 boot.scr（如果存在）
 if [ -f "${CONFIGS_DIR}/bootfs/boot.scr" ]; then
     cp -f "${CONFIGS_DIR}/bootfs/boot.scr" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} boot.scr 已复制"
+fi
+
+# 5.4. 复制 platform 文件（参考 rebuild 第822行）
+echo -e "${INFO} 复制 platform 文件..."
+# 复制 boot.bmp（如果存在）
+if [ -f "${CONFIGS_DIR}/bootfs/boot.bmp" ]; then
+    cp -f "${CONFIGS_DIR}/bootfs/boot.bmp" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} boot.bmp 已复制"
+fi
+
+# 复制 boot-desktop.png（如果存在）
+if [ -f "${CONFIGS_DIR}/bootfs/boot-desktop.png" ]; then
+    cp -f "${CONFIGS_DIR}/bootfs/boot-desktop.png" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} boot-desktop.png 已复制"
+fi
+
+# 复制 armbian_first_run.txt.template（如果存在）
+if [ -f "${CONFIGS_DIR}/bootfs/armbian_first_run.txt.template" ]; then
+    cp -f "${CONFIGS_DIR}/bootfs/armbian_first_run.txt.template" "${BOOTFS_TMP}/"
+    echo -e "${SUCCESS} armbian_first_run.txt.template 已复制"
+fi
+
+# 复制 extlinux/extlinux.conf.bak（如果存在）
+if [ -f "${CONFIGS_DIR}/bootfs/extlinux/extlinux.conf.bak" ]; then
+    cp -f "${CONFIGS_DIR}/bootfs/extlinux/extlinux.conf.bak" "${BOOTFS_TMP}/extlinux/"
+    echo -e "${SUCCESS} extlinux.conf.bak 已复制"
+fi
+
+# 5.5. 复制 mkimage 工具（如果存在，用于调试）
+if command -v mkimage >/dev/null 2>&1; then
+    mkimage_path=$(which mkimage)
+    if [ -f "${mkimage_path}" ]; then
+        cp -f "${mkimage_path}" "${BOOTFS_TMP}/mkimage" 2>/dev/null || true
+        echo -e "${INFO} mkimage 工具已复制（可选）"
+    fi
 fi
 
 echo -e "${SUCCESS} Boot分区内容准备完成"
