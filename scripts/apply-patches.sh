@@ -268,6 +268,10 @@ cat > /etc/fstab << 'FSTABEOF'
 FSTABEOF
 echo -e "${INFO} 已覆盖 /etc/fstab"
 
+# 恢复 /etc/update-motd.d 可执行权限（distro-agnostic 会 chmod -x，在此恢复以允许首次启动即显示 MOTD）
+chmod +x /etc/update-motd.d/* 2>/dev/null || true
+echo -e "${INFO} 已恢复 /etc/update-motd.d 可执行权限"
+
 # 获取MicroSLAM配置文件的路径
 # 这些文件应该在构建时被复制到armbian-build目录
 MICROSLAM_CONFIGS="/MicroSLAM-SDK/configs"
