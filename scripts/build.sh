@@ -168,123 +168,34 @@ if [ "${BUILD_ROOTFS}" = "yes" ]; then
     fi
 fi
 
-# 如果指定了 --clean-cache，执行清理逻辑并退出
+# 检测 docker compose / docker-compose（--clean-cache 与构建流程均需使用）
+if docker compose version >/dev/null 2>&1; then
+    DC="docker compose"
+elif docker-compose --version >/dev/null 2>&1; then
+    DC="docker-compose"
+else
+    echo -e "${ERROR} 未找到 docker compose 或 docker-compose"
+    exit 1
+fi
+
+# 如果指定了 --clean-cache，在容器内执行 clean-cache.sh 并退出
 if [ "${CLEAN_ONLY}" = "yes" ]; then
     echo -e "${STEPS} ========================================"
     echo -e "${STEPS} 清理缓存"
     echo -e "${STEPS} ========================================"
-    
-    # 根据 -u/-k/-f 参数决定清理范围
+
+    # 根据 -u/-k/-f 构造 clean-cache.sh 参数
     if [ "${BUILD_UBOOT}" = "no" ] && [ "${BUILD_KERNEL}" = "no" ] && [ "${BUILD_ROOTFS}" = "no" ]; then
-        # 默认情况：清理所有缓存
-        echo -e "${INFO} 清理所有缓存..."
-        
-        # 清理输出目录
-        if [ -d "${OUTPUT_DIR}" ]; then
-            rm -rf "${OUTPUT_DIR}"/*
-            echo -e "${SUCCESS} 输出目录已清理"
-        fi
-        
-        # 清理 Armbian 缓存（保留 tools 目录）
-        if [ -d "${PROJECT_ROOT}/repos/armbian-build/cache" ]; then
-            find "${PROJECT_ROOT}/repos/armbian-build/cache" -mindepth 1 -maxdepth 1 ! -name "tools" -exec rm -rf {} + 2>/dev/null || true
-            echo -e "${SUCCESS} Armbian 缓存已清理（保留 tools 目录）"
-        fi
-        
-        # 清理临时目录
-        if [ -d "${PROJECT_ROOT}/.tmp" ]; then
-            rm -rf "${PROJECT_ROOT}/.tmp"/*
-            echo -e "${SUCCESS} 临时目录已清理"
-        fi
-        
-        # 重置 git 仓库到原始状态
-        echo -e "${INFO} 重置 git 仓库到原始状态..."
-        
-        # 重置 armbian-build
-        if [ -d "${PROJECT_ROOT}/repos/armbian-build/.git" ]; then
-            cd "${PROJECT_ROOT}/repos/armbian-build"
-            git fetch origin 2>/dev/null || true
-            current_branch=$(git branch --show-current 2>/dev/null || echo "main")
-            git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-            git clean -fd 2>/dev/null || true
-            echo -e "${SUCCESS} armbian-build 仓库已重置"
-        fi
-        
-        # 重置 u-boot
-        if [ -d "${PROJECT_ROOT}/repos/u-boot/.git" ]; then
-            cd "${PROJECT_ROOT}/repos/u-boot"
-            git fetch origin 2>/dev/null || true
-            current_branch=$(git branch --show-current 2>/dev/null || echo "next-dev-v2024.10")
-            git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-            git clean -fd 2>/dev/null || true
-            echo -e "${SUCCESS} u-boot 仓库已重置"
-        fi
-        
-        # 重置 linux-6.1.y-rockchip
-        if [ -d "${PROJECT_ROOT}/repos/linux-6.1.y-rockchip/.git" ]; then
-            cd "${PROJECT_ROOT}/repos/linux-6.1.y-rockchip"
-            git fetch origin 2>/dev/null || true
-            current_branch=$(git branch --show-current 2>/dev/null || echo "6.1.y-rockchip")
-            git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-            git clean -fd 2>/dev/null || true
-            echo -e "${SUCCESS} linux-6.1.y-rockchip 仓库已重置"
-        fi
+        CLEAN_ARGS="--all"
     else
-        # 指定组件：仅清理对应组件的缓存
-        if [ "${BUILD_UBOOT}" = "yes" ]; then
-            echo -e "${INFO} 清理 U-Boot 缓存..."
-            if [ -d "${OUTPUT_DIR}/uboot" ]; then
-                rm -rf "${OUTPUT_DIR}/uboot"/*
-                echo -e "${SUCCESS} U-Boot 输出目录已清理"
-            fi
-            if [ -d "${PROJECT_ROOT}/repos/u-boot/.git" ]; then
-                cd "${PROJECT_ROOT}/repos/u-boot"
-                git fetch origin 2>/dev/null || true
-                current_branch=$(git branch --show-current 2>/dev/null || echo "next-dev-v2024.10")
-                git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-                git clean -fd 2>/dev/null || true
-                echo -e "${SUCCESS} u-boot 仓库已重置"
-            fi
-        fi
-        
-        if [ "${BUILD_KERNEL}" = "yes" ]; then
-            echo -e "${INFO} 清理 Kernel 缓存..."
-            if [ -d "${OUTPUT_DIR}/kernel" ]; then
-                rm -rf "${OUTPUT_DIR}/kernel"/*
-                echo -e "${SUCCESS} Kernel 输出目录已清理"
-            fi
-            if [ -d "${PROJECT_ROOT}/repos/linux-6.1.y-rockchip/.git" ]; then
-                cd "${PROJECT_ROOT}/repos/linux-6.1.y-rockchip"
-                git fetch origin 2>/dev/null || true
-                current_branch=$(git branch --show-current 2>/dev/null || echo "6.1.y-rockchip")
-                git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-                git clean -fd 2>/dev/null || true
-                echo -e "${SUCCESS} linux-6.1.y-rockchip 仓库已重置"
-            fi
-        fi
-        
-        if [ "${BUILD_ROOTFS}" = "yes" ]; then
-            echo -e "${INFO} 清理 RootFS 缓存..."
-            if [ -d "${OUTPUT_DIR}/rootfs" ]; then
-                rm -rf "${OUTPUT_DIR}/rootfs"/*
-                echo -e "${SUCCESS} RootFS 输出目录已清理"
-            fi
-            # 清理 Armbian rootfs 缓存
-            if [ -d "${PROJECT_ROOT}/repos/armbian-build/cache/rootfs" ]; then
-                rm -rf "${PROJECT_ROOT}/repos/armbian-build/cache/rootfs"/*
-                echo -e "${SUCCESS} Armbian rootfs 缓存已清理"
-            fi
-            if [ -d "${PROJECT_ROOT}/repos/armbian-build/.git" ]; then
-                cd "${PROJECT_ROOT}/repos/armbian-build"
-                git fetch origin 2>/dev/null || true
-                current_branch=$(git branch --show-current 2>/dev/null || echo "main")
-                git reset --hard "origin/${current_branch}" 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-                git clean -fd 2>/dev/null || true
-                echo -e "${SUCCESS} armbian-build 仓库已重置"
-            fi
-        fi
+        CLEAN_ARGS=""
+        [ "${BUILD_UBOOT}" = "yes" ] && CLEAN_ARGS="${CLEAN_ARGS} -u"
+        [ "${BUILD_KERNEL}" = "yes" ] && CLEAN_ARGS="${CLEAN_ARGS} -k"
+        [ "${BUILD_ROOTFS}" = "yes" ] && CLEAN_ARGS="${CLEAN_ARGS} -f"
+        CLEAN_ARGS="${CLEAN_ARGS# }"
     fi
-    
+
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" run --rm --user root microslam-builder bash -c 'cd /MicroSLAM-SDK && ./scripts/clean-cache.sh '"${CLEAN_ARGS}"
     echo -e "${SUCCESS} 缓存清理完成！"
     exit 0
 fi
@@ -331,21 +242,23 @@ if [ -z "${CPUTHREADS}" ]; then
     echo -e "${INFO} 自动计算编译线程数: ${CPUTHREADS}"
 fi
 
-# 创建输出目录
-create_output_dirs "${PROJECT_ROOT}"
+# 若需构建或打包，确保 init-repos、容器已启动并创建输出目录
+if [ "${BUILD_UBOOT}" = "yes" ] || [ "${BUILD_KERNEL}" = "yes" ] || [ "${BUILD_ROOTFS}" = "yes" ] || [ "${BUILD_PACKAGE}" = "yes" ]; then
+    [ "${BUILD_UBOOT}" = "yes" ] || [ "${BUILD_KERNEL}" = "yes" ] || [ "${BUILD_ROOTFS}" = "yes" ] && "${SCRIPT_DIR}/init-repos.sh"
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" up -d microslam-builder
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" exec --user root microslam-builder bash -c 'mkdir -p /MicroSLAM-SDK/output/{uboot,kernel,rootfs,images}'
+    echo -e "${SUCCESS} 输出目录已创建: ${OUTPUT_DIR}"
+fi
 
 # 构建U-Boot
 if [ "${BUILD_UBOOT}" = "yes" ]; then
     echo -e "${STEPS} ========================================"
     echo -e "${STEPS} 构建 U-Boot (${INCREMENTAL_BUILD_UBOOT}模式)"
     echo -e "${STEPS} ========================================"
-    
-    if [ "${INCREMENTAL_BUILD_UBOOT}" = "yes" ]; then
-        "${SCRIPT_DIR}/build-uboot.sh" --incremental -j "${CPUTHREADS}"
-    else
-        "${SCRIPT_DIR}/build-uboot.sh" -j "${CPUTHREADS}"
-    fi
-    
+
+    UBOOT_ARGS="-j ${CPUTHREADS}"
+    [ "${INCREMENTAL_BUILD_UBOOT}" = "yes" ] && UBOOT_ARGS="--incremental ${UBOOT_ARGS}"
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" exec --user root -e INCREMENTAL_BUILD_UBOOT="${INCREMENTAL_BUILD_UBOOT}" -e CPUTHREADS="${CPUTHREADS}" microslam-builder bash -c 'cd /MicroSLAM-SDK && ./scripts/build-uboot.sh '"${UBOOT_ARGS}"
     if [ $? -ne 0 ]; then
         echo -e "${ERROR} U-Boot构建失败"
         exit 1
@@ -360,20 +273,40 @@ if [ "${BUILD_KERNEL}" = "yes" ]; then
     echo -e "${STEPS} ========================================"
     echo -e "${STEPS} 构建 Kernel (${INCREMENTAL_BUILD_KERNEL}模式)"
     echo -e "${STEPS} ========================================"
-    
-    if [ "${INCREMENTAL_BUILD_KERNEL}" = "yes" ]; then
-        "${SCRIPT_DIR}/build-kernel.sh" --incremental -j "${CPUTHREADS}"
-    else
-        "${SCRIPT_DIR}/build-kernel.sh" -j "${CPUTHREADS}"
-    fi
-    
+
+    KERNEL_ARGS="-j ${CPUTHREADS}"
+    [ "${INCREMENTAL_BUILD_KERNEL}" = "yes" ] && KERNEL_ARGS="--incremental ${KERNEL_ARGS}"
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" exec --user root -e INCREMENTAL_BUILD_KERNEL="${INCREMENTAL_BUILD_KERNEL}" -e CPUTHREADS="${CPUTHREADS}" microslam-builder bash -c 'cd /MicroSLAM-SDK && ./scripts/build-kernel.sh '"${KERNEL_ARGS}"
     if [ $? -ne 0 ]; then
         echo -e "${ERROR} Kernel构建失败"
         exit 1
     fi
-    
+
     # 检查输出
     check_build_outputs "kernel" "${PROJECT_ROOT}" || exit 1
+
+    # 在宿主机通过 arm64 容器生成 uInitrd（在 builder 内 run 时 compose 的 . 会解析到错误宿主机路径，/MicroSLAM-SDK 挂载为空）
+    KERNEL_OUTNAME=$(ls -1 "${PROJECT_ROOT}/output/kernel/modules/lib/modules/" 2>/dev/null | head -1)
+    if [ -n "${KERNEL_OUTNAME}" ]; then
+        echo -e "${INFO} 在 arm64 容器中生成 uInitrd..."
+        $DC -f "${PROJECT_ROOT}/docker-compose.yml" run --rm -e KERNEL_OUTNAME="${KERNEL_OUTNAME}" microslam-arm64 bash -c '
+            mkdir -p /boot /usr/lib/modules
+            cp -f /MicroSLAM-SDK/output/kernel/boot/vmlinuz-${KERNEL_OUTNAME} /boot/vmlinuz-${KERNEL_OUTNAME}
+            cp -f /MicroSLAM-SDK/output/kernel/boot/config-${KERNEL_OUTNAME} /boot/config-${KERNEL_OUTNAME}
+            cp -f /MicroSLAM-SDK/output/kernel/boot/System.map-${KERNEL_OUTNAME} /boot/System.map-${KERNEL_OUTNAME}
+            cp -f /MicroSLAM-SDK/output/kernel/boot/vmlinuz-${KERNEL_OUTNAME} /boot/Image
+            cp -r /MicroSLAM-SDK/output/kernel/modules/lib/modules/${KERNEL_OUTNAME} /usr/lib/modules/
+            cd /boot && update-initramfs -c -k ${KERNEL_OUTNAME}
+            mkimage -A arm64 -O linux -T ramdisk -C none -a 0 -e 0 -n initramfs-${KERNEL_OUTNAME} -d /boot/initrd.img-${KERNEL_OUTNAME} /boot/uInitrd-${KERNEL_OUTNAME}
+            cp -f /boot/uInitrd-${KERNEL_OUTNAME} /boot/initrd.img-${KERNEL_OUTNAME} /MicroSLAM-SDK/output/kernel/boot/
+        '
+        echo -e "${SUCCESS} uInitrd 生成完成"
+        # build-kernel 的 19.1 在 uInitrd 之前已执行，此处在 builder 容器内以 root 重新打包 boot 以包含 uInitrd（宿主机无权限覆盖 root 属主的 tar.gz）
+        if [ -f "${PROJECT_ROOT}/output/kernel/boot/uInitrd-${KERNEL_OUTNAME}" ] && [ -d "${PROJECT_ROOT}/output/kernel/packages/${KERNEL_OUTNAME}" ]; then
+            $DC -f "${PROJECT_ROOT}/docker-compose.yml" exec --user root microslam-builder bash -c 'tar -czf /MicroSLAM-SDK/output/kernel/packages/'"${KERNEL_OUTNAME}"'/boot-'"${KERNEL_OUTNAME}"'.tar.gz -C /MicroSLAM-SDK/output/kernel/boot .'
+            echo -e "${INFO} 已更新 boot 包以包含 uInitrd"
+        fi
+    fi
 fi
 
 # 构建RootFS
@@ -381,18 +314,16 @@ if [ "${BUILD_ROOTFS}" = "yes" ]; then
     echo -e "${STEPS} ========================================"
     echo -e "${STEPS} 构建 RootFS (${INCREMENTAL_BUILD_ROOTFS}模式)"
     echo -e "${STEPS} ========================================"
-    
-    "${SCRIPT_DIR}/build-rootfs.sh" \
-        -r "${RELEASE}" \
-        -b "${BRANCH}" \
-        ${BUILD_DESKTOP:+--desktop} \
-        ${BUILD_MINIMAL:+--minimal}
-    
+
+    ROOTFS_ARGS="-r ${RELEASE} -b ${BRANCH}"
+    [ "${BUILD_DESKTOP}" = "yes" ] && ROOTFS_ARGS="${ROOTFS_ARGS} --desktop"
+    [ "${BUILD_MINIMAL}" = "yes" ] && ROOTFS_ARGS="${ROOTFS_ARGS} --minimal"
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" exec --user root -e RELEASE="${RELEASE}" -e BRANCH="${BRANCH}" -e BUILD_DESKTOP="${BUILD_DESKTOP}" -e BUILD_MINIMAL="${BUILD_MINIMAL}" -e INCREMENTAL_BUILD_ROOTFS="${INCREMENTAL_BUILD_ROOTFS}" microslam-builder bash -c 'cd /MicroSLAM-SDK && ./scripts/build-rootfs.sh '"${ROOTFS_ARGS}"
     if [ $? -ne 0 ]; then
         echo -e "${ERROR} RootFS构建失败"
         exit 1
     fi
-    
+
     # 检查输出
     check_build_outputs "rootfs" "${PROJECT_ROOT}" || exit 1
 fi
@@ -445,9 +376,8 @@ if [ "${BUILD_PACKAGE}" = "yes" ]; then
         echo -e "${ERROR} 请先构建这些组件（使用 -u/-k/-f 参数）"
         exit 1
     fi
-    
-    "${SCRIPT_DIR}/package-image.sh"
-    
+
+    $DC -f "${PROJECT_ROOT}/docker-compose.yml" exec --user root microslam-builder bash -c 'cd /MicroSLAM-SDK && ./scripts/package-image.sh'
     if [ $? -ne 0 ]; then
         echo -e "${ERROR} 镜像打包失败"
         exit 1
