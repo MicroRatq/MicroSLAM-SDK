@@ -991,27 +991,19 @@
 	status = "okay";
 };
 
+/* AX210 */
 &pcie2x1l0 {
 	reset-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
 	vpcie3v3-supply = <&vcc3v3_pcie2x1l0>;
 	status = "okay";
 };
 
-/* AX210 */
+/* rtl8125b */
 &pcie2x1l1 {
-	reset-gpios = <&gpio1 RK_PB4 GPIO_ACTIVE_HIGH>;
+	reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_HIGH>;
 	// pinctrl-names = "default";
 	// pinctrl-0 = <&pcie2x1l1_rst>;
 	vpcie3v3-supply = <&vcc3v3_pcie2x1l1>;
-	status = "okay";
-};
-
-/* rtl8125b */
-&pcie2x1l2 {
-	reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_HIGH>;
-	// pinctrl-names = "default";
-	// pinctrl-0 = <&pcie2x1l2_rst>;
-	vpcie3v3-supply = <&vcc3v3_pcie2x1l2>;
 	status = "okay";
 
 	pcie@0,0 {
@@ -1038,6 +1030,14 @@
 			r8125,led2 = <0x002a>;
 		};
 	};
+};
+
+&pcie2x1l2 {
+	// reset-gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_HIGH>;
+	// pinctrl-names = "default";
+	// pinctrl-0 = <&pcie2x1l2_rst>;
+	vpcie3v3-supply = <&vcc3v3_pcie2x1l2>;
+	status = "okay";
 };
 
 // &pcie30phy {

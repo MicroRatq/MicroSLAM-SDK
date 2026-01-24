@@ -2,8 +2,7 @@ verbosity=7
 bootlogo=true
 fdtfile=rockchip/rk3588-microslam.dtb
 rootdev=/dev/mmcblk0p2
-rootfstype=btrfs
-rootflags=compress=zstd:6
+rootfstype=ext4
 earlycon=
 console=
 consoleargs=console=ttyFIQ6,1500000 earlycon=uart8250,mmio32,0xfeb90000
