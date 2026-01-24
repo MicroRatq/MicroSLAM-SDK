@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     lz4 \
     libusb-1.0-0-dev \
     lsof \
+    psmisc \
     ntpsec-ntpdate \
     patchutils \
     pkg-config \

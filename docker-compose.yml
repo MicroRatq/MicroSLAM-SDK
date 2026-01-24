@@ -1,5 +1,6 @@
 services:
   microslam-builder:
+    platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile
@@ -24,6 +25,15 @@ services:
       - USE_CCACHE=no
     networks:
       - microslam-network
+
+  microslam-arm64:
+    image: ophub/armbian-noble:arm64
+    platform: linux/arm64
+    volumes:
+      - "./:/MicroSLAM-SDK"
+      - "./repos:/MicroSLAM-SDK/repos"
+    environment:
+      - DEBIAN_FRONTEND=noninteractive
 
 networks:
   microslam-network:
