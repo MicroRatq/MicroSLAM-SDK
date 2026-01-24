@@ -54,11 +54,7 @@ done
 
 echo -e "${STEPS} 开始构建MicroSLAM Kernel..."
 
-# 1. 初始化仓库
-echo -e "${INFO} 初始化仓库..."
-"${SCRIPT_DIR}/init-repos.sh"
-
-# 2. 检查Kernel源码是否存在
+# 1. 检查Kernel源码是否存在（init-repos 已由 build.sh 在宿主机先执行）
 if [ ! -d "${KERNEL_DIR}" ]; then
     echo -e "${ERROR} linux-6.1.y-rockchip 仓库不存在，请先运行 init-repos.sh"
     exit 1
@@ -232,136 +228,7 @@ if [ -f ".config" ]; then
     echo -e "${SUCCESS} 复制内核配置文件完成"
 fi
 
-# 17.6. 生成 uInitrd 和 initrd.img（可选，如果系统支持 update-initramfs）
-# 注意：在交叉编译环境中，这通常需要目标系统的 rootfs
-# 如果无法生成，boot.cmd 已经支持可选加载 uInitrd
-# 在 Docker 容器内，需要先安装 initramfs-tools 和 u-boot-tools
-echo -e "${INFO} 检查 uInitrd 生成环境..."
-
-# 检查并安装 initramfs-tools（如果需要）
-if ! command -v update-initramfs >/dev/null 2>&1; then
-    echo -e "${INFO} update-initramfs 不存在，尝试安装 initramfs-tools..."
-    if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
-        sudo apt-get update -qq >/dev/null 2>&1
-        sudo apt-get install -y initramfs-tools >/dev/null 2>&1 || echo -e "${WARNING} 无法安装 initramfs-tools"
-    fi
-fi
-
-# 检查并安装 u-boot-tools（如果需要，用于 mkimage）
-if ! command -v mkimage >/dev/null 2>&1; then
-    echo -e "${INFO} mkimage 不存在，尝试安装 u-boot-tools..."
-    if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
-        sudo apt-get install -y u-boot-tools >/dev/null 2>&1 || echo -e "${WARNING} 无法安装 u-boot-tools"
-    fi
-fi
-
-if command -v update-initramfs >/dev/null 2>&1 && command -v mkimage >/dev/null 2>&1; then
-    echo -e "${INFO} 尝试生成 uInitrd 和 initrd.img..."
-    
-    # 确保必要目录存在（使用 sudo）
-    if command -v sudo >/dev/null 2>&1; then
-        sudo mkdir -p /boot /usr/lib/modules
-    else
-        mkdir -p /boot /usr/lib/modules
-    fi
-    
-    # 备份当前 /boot 文件
-    BOOT_BACKUP="/tmp/boot_backup_$$"
-    mkdir -p "${BOOT_BACKUP}"
-    if command -v sudo >/dev/null 2>&1; then
-        sudo mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} "${BOOT_BACKUP}/" 2>/dev/null || true
-    else
-        mv -f /boot/{config-*,initrd.img-*,System.map-*,vmlinuz-*,uInitrd*,*Image} "${BOOT_BACKUP}/" 2>/dev/null || true
-    fi
-    
-    # 复制文件到 /boot（使用 sudo）
-    if command -v sudo >/dev/null 2>&1; then
-        sudo cp -f "${OUTPUT_DIR}/boot/System.map-${KERNEL_OUTNAME}" /boot/System.map-${KERNEL_OUTNAME}
-        sudo cp -f "${OUTPUT_DIR}/boot/config-${KERNEL_OUTNAME}" /boot/config-${KERNEL_OUTNAME}
-        sudo cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/vmlinuz-${KERNEL_OUTNAME}
-        sudo cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/Image
-    else
-        cp -f "${OUTPUT_DIR}/boot/System.map-${KERNEL_OUTNAME}" /boot/System.map-${KERNEL_OUTNAME}
-        cp -f "${OUTPUT_DIR}/boot/config-${KERNEL_OUTNAME}" /boot/config-${KERNEL_OUTNAME}
-        cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/vmlinuz-${KERNEL_OUTNAME}
-        cp -f "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}" /boot/Image
-    fi
-    
-    # 复制模块到 /usr/lib/modules（使用 sudo）
-    MODULES_BACKUP="/tmp/modules_backup_$$"
-    mkdir -p "${MODULES_BACKUP}"
-    if command -v sudo >/dev/null 2>&1; then
-        sudo mv -f /usr/lib/modules/$(uname -r) "${MODULES_BACKUP}/" 2>/dev/null || true
-        sudo mkdir -p /usr/lib/modules
-        sudo cp -rf "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" /usr/lib/modules/
-    else
-        mv -f /usr/lib/modules/$(uname -r) "${MODULES_BACKUP}/" 2>/dev/null || true
-        mkdir -p /usr/lib/modules
-        cp -rf "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" /usr/lib/modules/
-    fi
-    
-    # 生成 initrd.img（使用 sudo）
-    cd /boot
-    if command -v sudo >/dev/null 2>&1; then
-        sudo update-initramfs -c -k ${KERNEL_OUTNAME} 2>&1 | grep -v "^W:" || echo -e "${WARNING} update-initramfs 执行失败，跳过 uInitrd 生成"
-    else
-        update-initramfs -c -k ${KERNEL_OUTNAME} 2>&1 | grep -v "^W:" || echo -e "${WARNING} update-initramfs 执行失败，跳过 uInitrd 生成"
-    fi
-    
-    # 使用 mkimage 将 initrd.img 转换为 uInitrd（使用 sudo）
-    if [ -f "initrd.img-${KERNEL_OUTNAME}" ]; then
-        echo -e "${INFO} 将 initrd.img 转换为 uInitrd..."
-        if command -v sudo >/dev/null 2>&1; then
-            sudo mkimage -A arm64 -O linux -T ramdisk -C none -a 0 -e 0 \
-                -n initramfs-${KERNEL_OUTNAME} -d initrd.img-${KERNEL_OUTNAME} \
-                uInitrd-${KERNEL_OUTNAME} >/dev/null 2>&1
-        else
-            mkimage -A arm64 -O linux -T ramdisk -C none -a 0 -e 0 \
-                -n initramfs-${KERNEL_OUTNAME} -d initrd.img-${KERNEL_OUTNAME} \
-                uInitrd-${KERNEL_OUTNAME} >/dev/null 2>&1
-        fi
-        
-        if [ -f "uInitrd-${KERNEL_OUTNAME}" ]; then
-            echo -e "${SUCCESS} uInitrd 生成成功"
-        else
-            echo -e "${WARNING} uInitrd 转换失败"
-        fi
-    fi
-    
-    # 复制生成的 uInitrd 和 initrd.img 回输出目录（使用 sudo）
-    if [ -f "uInitrd-${KERNEL_OUTNAME}" ]; then
-        if command -v sudo >/dev/null 2>&1; then
-            sudo cp -f uInitrd-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
-        else
-            cp -f uInitrd-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
-        fi
-    fi
-    if [ -f "initrd.img-${KERNEL_OUTNAME}" ]; then
-        if command -v sudo >/dev/null 2>&1; then
-            sudo cp -f initrd.img-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
-        else
-            cp -f initrd.img-${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
-        fi
-    fi
-    
-    # 恢复 /boot 和 /usr/lib/modules（使用 sudo）
-    if command -v sudo >/dev/null 2>&1; then
-        sudo mv -f *${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
-        sudo mv -f "${BOOT_BACKUP}"/* /boot/ 2>/dev/null || true
-        sudo rm -rf /usr/lib/modules/${KERNEL_OUTNAME}
-        sudo mv -f "${MODULES_BACKUP}"/* /usr/lib/modules/ 2>/dev/null || true
-    else
-        mv -f *${KERNEL_OUTNAME} "${OUTPUT_DIR}/boot/" 2>/dev/null || true
-        mv -f "${BOOT_BACKUP}"/* /boot/ 2>/dev/null || true
-        rm -rf /usr/lib/modules/${KERNEL_OUTNAME}
-        mv -f "${MODULES_BACKUP}"/* /usr/lib/modules/ 2>/dev/null || true
-    fi
-    rm -rf "${BOOT_BACKUP}" "${MODULES_BACKUP}"
-    cd - > /dev/null
-else
-    echo -e "${WARNING} 无法生成 uInitrd（需要 update-initramfs 和 mkimage），boot.cmd 已支持可选加载"
-fi
-
+# 17.6. uInitrd 由 build.sh 在宿主机通过 arm64 容器生成（在 builder 内调用 run 时 compose 的 . 会解析到错误路径，导致挂载的 /MicroSLAM-SDK 为空）
 # 18. 复制设备树文件
 if [ -d "arch/${ARCH}/boot/dts/rockchip" ]; then
     cp -f arch/${ARCH}/boot/dts/rockchip/*.dtb "${OUTPUT_DIR}/dtb/rockchip/" 2>/dev/null || true

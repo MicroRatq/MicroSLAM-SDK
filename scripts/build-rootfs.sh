@@ -60,11 +60,7 @@ done
 
 echo -e "${STEPS} 开始构建MicroSLAM RootFS（手动实现，跳过 compile.sh）..."
 
-# 1. 初始化仓库
-echo -e "${INFO} 初始化仓库..."
-"${SCRIPT_DIR}/init-repos.sh"
-
-# 2. 检查Armbian仓库是否存在
+# 1. 检查Armbian仓库是否存在（init-repos 已由 build.sh 在宿主机先执行）
 if [ ! -d "${ARMBIAN_DIR}" ]; then
     echo -e "${ERROR} armbian/build 仓库不存在，请先运行 init-repos.sh"
     exit 1
