@@ -258,6 +258,16 @@ SUCCESS="[\033[92m SUCCESS \033[0m]"
 
 echo -e "${STEPS} 开始自定义MicroSLAM镜像..."
 
+# 覆盖 /etc/fstab 为 MicroSLAM 分区布局（p1=/boot, p2=/），替换 Armbian distro-agnostic 的 p1=/, p2=/usr
+# 此步骤不依赖外部配置，始终执行
+echo -e "${INFO} 写入 /etc/fstab（MicroSLAM 分区布局：p1=/boot, p2=/）..."
+cat > /etc/fstab << 'FSTABEOF'
+# UNCONFIGURED FSTAB FOR BASE SYSTEM
+/dev/mmcblk0p1 /boot ext4 defaults 0 1
+/dev/mmcblk0p2 / ext4 defaults 0 2
+FSTABEOF
+echo -e "${INFO} 已覆盖 /etc/fstab"
+
 # 获取MicroSLAM配置文件的路径
 # 这些文件应该在构建时被复制到armbian-build目录
 MICROSLAM_CONFIGS="/MicroSLAM-SDK/configs"
@@ -270,7 +280,8 @@ if [ ! -d "${MICROSLAM_CONFIGS}" ]; then
     elif [ -d "/MicroSLAM/configs" ]; then
         MICROSLAM_CONFIGS="/MicroSLAM/configs"
     else
-        echo -e "${INFO} 未找到MicroSLAM配置文件，跳过自定义步骤"
+        echo -e "${INFO} 未找到MicroSLAM配置文件，跳过 bootfs/rootfs 复制步骤"
+        echo -e "${SUCCESS} MicroSLAM镜像自定义完成"
         exit 0
     fi
 fi
