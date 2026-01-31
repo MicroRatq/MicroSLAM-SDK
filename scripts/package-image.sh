@@ -380,6 +380,20 @@ fi
 sfdisk_version=$(sfdisk --version 2>&1 | awk '/util-linux/ {print $NF}' || echo "0.0.0")
 sfdisk_version_num=$(echo "${sfdisk_version}" | awk -F. '{printf "%d%02d%02d\n", $1, $2, $3}')
 
+# 确保有足够的 loop 设备节点（Docker 容器环境修复）
+# 在容器中，宿主机后创建的 loop 设备节点不会自动出现
+echo -e "${INFO} 检查并创建 loop 设备节点..."
+NEXT_LOOP=$(losetup -f 2>/dev/null | grep -oE '[0-9]+$')
+if [ -n "${NEXT_LOOP}" ]; then
+    # 确保从 loop0 到 NEXT_LOOP+2 的设备节点都存在
+    for i in $(seq 0 $((NEXT_LOOP + 2))); do
+        if [ ! -e "/dev/loop${i}" ]; then
+            mknod "/dev/loop${i}" b 7 "${i}" 2>/dev/null || true
+            echo -e "${INFO} 创建 loop 设备节点: /dev/loop${i}"
+        fi
+    done
+fi
+
 # 创建 loop 设备（参考 Armbian 的实现）
 declare LOOP_DEV
 if [ "${sfdisk_version_num}" -ge "24100" ]; then
