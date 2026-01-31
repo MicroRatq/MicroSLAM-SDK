@@ -140,16 +140,45 @@ else
     echo -e "${SUCCESS} 配置已更新为完整配置"
 fi
 
-# 11. 复制DTS文件（如果需要）
+# 11. 复制DTS文件并更新Makefile（如果需要）
 if [ -d "${CONFIGS_DIR}/kernel/dts" ]; then
     echo -e "${INFO} 复制DTS文件..."
+    DTS_ROCKCHIP_DIR="arch/${ARCH}/boot/dts/rockchip"
+    DTS_MAKEFILE="${DTS_ROCKCHIP_DIR}/Makefile"
+    
     for dts_file in "${CONFIGS_DIR}/kernel/dts"/*.dts; do
         if [ -f "${dts_file}" ]; then
             dts_name=$(basename "${dts_file}")
-            dts_dest="arch/${ARCH}/boot/dts/rockchip/${dts_name}"
+            dts_dest="${DTS_ROCKCHIP_DIR}/${dts_name}"
             mkdir -p "$(dirname "${dts_dest}")"
             cp -f "${dts_file}" "${dts_dest}"
             echo -e "${INFO} 复制 ${dts_name} 到 ${dts_dest}"
+            
+            # 获取对应的 dtb 文件名（将 .dts 替换为 .dtb）
+            dtb_name="${dts_name%.dts}.dtb"
+            
+            # 检查 Makefile 中是否已存在该条目
+            if [ -f "${DTS_MAKEFILE}" ]; then
+                if ! grep -qF "${dtb_name}" "${DTS_MAKEFILE}"; then
+                    echo -e "${INFO} 向 Makefile 添加 ${dtb_name} 条目..."
+                    # 在最后一个 rk3588 相关行之后插入新条目（更可靠的方式）
+                    # 查找最后一个包含 rk3588 的行号
+                    last_rk3588_line=$(grep -n "rk3588" "${DTS_MAKEFILE}" | tail -1 | cut -d: -f1)
+                    if [ -n "${last_rk3588_line}" ]; then
+                        # 在该行之后插入新条目
+                        sed -i "${last_rk3588_line}a dtb-\$(CONFIG_ARCH_ROCKCHIP) += ${dtb_name}" "${DTS_MAKEFILE}"
+                        echo -e "${SUCCESS} 已添加 ${dtb_name} 到 Makefile (行 $((last_rk3588_line + 1)))"
+                    else
+                        # 如果找不到 rk3588 行，在文件末尾 subdir-y 行之前插入
+                        sed -i "/^subdir-y/i dtb-\$(CONFIG_ARCH_ROCKCHIP) += ${dtb_name}" "${DTS_MAKEFILE}"
+                        echo -e "${SUCCESS} 已添加 ${dtb_name} 到 Makefile (在 subdir-y 之前)"
+                    fi
+                else
+                    echo -e "${INFO} ${dtb_name} 已存在于 Makefile 中"
+                fi
+            else
+                echo -e "${WARNING} 未找到 ${DTS_MAKEFILE}"
+            fi
         fi
     done
 fi

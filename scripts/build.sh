@@ -178,6 +178,23 @@ else
     exit 1
 fi
 
+# 检测并配置 QEMU binfmt（用于 arm64 容器）
+check_and_setup_binfmt() {
+    # 检查是否已配置 aarch64 binfmt
+    if [ -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+        return 0
+    fi
+
+    echo -e "${INFO} 配置 QEMU binfmt 以支持 arm64 容器..."
+    if docker run --rm --privileged multiarch/qemu-user-static --reset -p yes >/dev/null 2>&1; then
+        echo -e "${SUCCESS} QEMU binfmt 配置成功"
+        return 0
+    else
+        echo -e "${WARNING} QEMU binfmt 配置失败，arm64 容器功能可能不可用"
+        return 1
+    fi
+}
+
 # 如果指定了 --clean-cache，在容器内执行 clean-cache.sh 并退出
 if [ "${CLEAN_ONLY}" = "yes" ]; then
     echo -e "${STEPS} ========================================"
@@ -230,6 +247,11 @@ fi
 export INCREMENTAL_BUILD_UBOOT
 export INCREMENTAL_BUILD_KERNEL
 export INCREMENTAL_BUILD_ROOTFS
+
+# 在需要 arm64 容器时检查 binfmt（用于生成 uInitrd）
+if [ "${BUILD_KERNEL}" = "yes" ]; then
+    check_and_setup_binfmt
+fi
 
 echo -e "${STEPS} 开始MicroSLAM构建流程..."
 echo -e "${INFO} 构建组件: U-Boot=${BUILD_UBOOT}, Kernel=${BUILD_KERNEL}, RootFS=${BUILD_ROOTFS}, Package=${BUILD_PACKAGE}"
