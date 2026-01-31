@@ -159,6 +159,11 @@ export ARMBIAN_RUNNING_IN_CONTAINER=yes
 export USE_CCACHE=no
 export NEEDS_BINFMT="yes"  # 确保 binfmt 在 prepare_host 中安装
 
+# 设置 chroot 环境中使用的 DNS 服务器
+# 在 Docker 容器中，必须使用 Docker 的内嵌 DNS 服务器（127.0.0.11）
+# 默认的 1.0.0.1（Cloudflare DNS）在容器中无法直接访问
+export NAMESERVER="${NAMESERVER:-127.0.0.11}"
+
 # 8. 执行配置准备（最小配置，只配置 rootfs，不配置 uboot/kernel）
 echo -e "${INFO} 执行配置准备（跳过 uboot/kernel 配置）..."
 prep_conf_main_only_rootfs_ni < /dev/null
