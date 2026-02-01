@@ -1,0 +1,83 @@
+From: MicroSLAM SDK <sdk@microslam.local>
+Date: Sat, 1 Feb 2026 00:00:00 +0800
+Subject: [PATCH] drm/rockchip: dw-dp: add oob_hotplug_event for typec dp altmode
+
+Add support for out-of-band hotplug events from Type-C DisplayPort
+alternate mode driver. This enables proper HPD (Hot Plug Detect) signal
+propagation when using USB-C to DisplayPort connections.
+
+Changes:
+- Add dw_dp_connector_oob_hotplug_event() callback function with
+  debounce logic to avoid conflicts with typec_mux_set callback
+- Register the callback in dw_dp_connector_funcs
+- Set connector->fwnode after drm_connector_init() to prevent it from
+  being cleared by memset() during initialization
+
+The oob_hotplug_event callback checks for pending work and current
+hotplug status to avoid race conditions and FIFO overflow issues
+that can occur with rapid plug/unplug cycles.
+
+Signed-off-by: MicroSLAM SDK <sdk@microslam.local>
+---
+ drivers/gpu/drm/rockchip/dw-dp.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/drivers/gpu/drm/rockchip/dw-dp.c b/drivers/gpu/drm/rockchip/dw-dp.c
+index a29212f42..a9ff2d4e0 100644
+--- a/drivers/gpu/drm/rockchip/dw-dp.c
++++ b/drivers/gpu/drm/rockchip/dw-dp.c
+@@ -1634,6 +1634,32 @@ static int dw_dp_debugfs_init(struct dw_dp *dp)
+ 	return 0;
+ }
+ 
++static void dw_dp_connector_oob_hotplug_event(struct drm_connector *connector)
++{
++	struct dw_dp *dp = connector_to_dp(connector);
++
++	/*
++	 * OOB hotplug event from typec displayport altmode driver.
++	 * The typec_mux_set callback already handles HPD events, so we only
++	 * need to trigger detection if no work is already pending to avoid
++	 * race conditions and FIFO overflow issues.
++	 */
++	if (work_pending(&dp->hpd_work)) {
++		dev_dbg(dp->dev, "oob_hotplug_event: work already pending, skip\n");
++		return;
++	}
++
++	dev_dbg(dp->dev, "oob_hotplug_event triggered\n");
++
++	mutex_lock(&dp->irq_lock);
++	if (!dp->hotplug.status) {
++		dp->hotplug.long_hpd = true;
++		dp->hotplug.status = true;
++		schedule_work(&dp->hpd_work);
++	}
++	mutex_unlock(&dp->irq_lock);
++}
++
+ static const struct drm_connector_funcs dw_dp_connector_funcs = {
+ 	.detect			= dw_dp_connector_detect,
+ 	.fill_modes		= drm_helper_probe_single_connector_modes,
+@@ -1644,6 +1670,7 @@ static const struct drm_connector_funcs dw_dp_connector_funcs = {
+ 	.atomic_destroy_state	= dw_dp_atomic_connector_destroy_state,
+ 	.atomic_get_property	= dw_dp_atomic_connector_get_property,
+ 	.atomic_set_property	= dw_dp_atomic_connector_set_property,
++	.oob_hotplug_event	= dw_dp_connector_oob_hotplug_event,
+ };
+ 
+ static int dw_dp_update_hdr_property(struct drm_connector *connector)
+@@ -4440,6 +4467,11 @@ static int dw_dp_connector_init(struct dw_dp *dp)
+ 		return ret;
+ 	}
+ 
++	/* Set fwnode for oob_hotplug_event from typec displayport altmode
++	 * Must be set AFTER drm_connector_init() as it does memset() on connector
++	 */
++	connector->fwnode = dev_fwnode(dp->dev);
++
+ 	drm_connector_helper_add(connector,
+ 				 &dw_dp_connector_helper_funcs);
+ 
+-- 
+2.34.1
