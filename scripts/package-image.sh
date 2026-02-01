@@ -101,10 +101,19 @@ fi
 # 查找实际的rootfs目录（可能解压后有一个子目录）
 ROOTFS_ACTUAL=$(find "${ROOTFS_TMP}" -maxdepth 1 -type d ! -path "${ROOTFS_TMP}" | head -1)
 if [ -n "${ROOTFS_ACTUAL}" ] && [ -d "${ROOTFS_ACTUAL}" ]; then
-    # 将子目录内容移动到根目录
+    # 将子目录内容移动到根目录（使用 shopt dotglob 确保包含隐藏文件和空目录）
+    shopt -s dotglob
     mv "${ROOTFS_ACTUAL}"/* "${ROOTFS_TMP}"/ 2>/dev/null || true
+    shopt -u dotglob
     rmdir "${ROOTFS_ACTUAL}" 2>/dev/null || true
 fi
+
+# 确保关键目录存在（/dev 等空目录可能在解压时丢失）
+echo -e "${INFO} 确保关键系统目录存在..."
+for dir in dev proc sys run tmp mnt media; do
+    mkdir -p "${ROOTFS_TMP}/${dir}"
+done
+chmod 1777 "${ROOTFS_TMP}/tmp"
 
 echo -e "${SUCCESS} RootFS解压完成"
 
@@ -512,9 +521,9 @@ fi
 echo -e "${INFO} 复制boot分区内容..."
 cp -rf "${BOOTFS_TMP}"/* "${BOOT_MOUNT}/"
 
-# 复制rootfs内容
+# 复制rootfs内容（使用 /. 语法确保复制所有内容包括隐藏文件和空目录）
 echo -e "${INFO} 复制rootfs内容..."
-cp -a "${ROOTFS_TMP}"/* "${ROOT_MOUNT}/"
+cp -a "${ROOTFS_TMP}/." "${ROOT_MOUNT}/"
 
 # 10. 卸载分区
 echo -e "${INFO} 卸载分区..."
