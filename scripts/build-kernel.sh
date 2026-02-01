@@ -140,7 +140,29 @@ else
     echo -e "${SUCCESS} 配置已更新为完整配置"
 fi
 
-# 11. 复制DTS文件并更新Makefile（如果需要）
+# 11. 应用内核补丁（如果存在）
+if [ -d "${CONFIGS_DIR}/kernel/patch" ]; then
+    echo -e "${INFO} 检查内核补丁..."
+    for patch_file in "${CONFIGS_DIR}/kernel/patch"/*.patch; do
+        if [ -f "${patch_file}" ]; then
+            patch_name=$(basename "${patch_file}")
+            # 检查补丁是否已应用（使用 --dry-run 和 -R 反向检查）
+            if patch -p1 -R --dry-run < "${patch_file}" >/dev/null 2>&1; then
+                echo -e "${INFO} 补丁 ${patch_name} 已应用，跳过"
+            else
+                echo -e "${INFO} 应用补丁 ${patch_name}..."
+                if patch -p1 < "${patch_file}"; then
+                    echo -e "${SUCCESS} 补丁 ${patch_name} 应用成功"
+                else
+                    echo -e "${ERROR} 补丁 ${patch_name} 应用失败"
+                    exit 1
+                fi
+            fi
+        fi
+    done
+fi
+
+# 12. 复制DTS文件并更新Makefile（如果需要）
 if [ -d "${CONFIGS_DIR}/kernel/dts" ]; then
     echo -e "${INFO} 复制DTS文件..."
     DTS_ROCKCHIP_DIR="arch/${ARCH}/boot/dts/rockchip"
@@ -183,7 +205,7 @@ if [ -d "${CONFIGS_DIR}/kernel/dts" ]; then
     done
 fi
 
-# 12. 编译内核
+# 13. 编译内核
 echo -e "${INFO} 开始编译内核（线程数: ${CPUTHREADS}）..."
 make ${MAKE_SET_STRING} Image dtbs -j${CPUTHREADS}
 if [ $? -ne 0 ]; then
@@ -192,7 +214,7 @@ if [ $? -ne 0 ]; then
 fi
 echo -e "${SUCCESS} 内核编译成功"
 
-# 13. 编译模块
+# 14. 编译模块
 echo -e "${INFO} 开始编译内核模块（线程数: ${CPUTHREADS}）..."
 make ${MAKE_SET_STRING} modules -j${CPUTHREADS}
 if [ $? -ne 0 ]; then
@@ -201,7 +223,7 @@ if [ $? -ne 0 ]; then
 fi
 echo -e "${SUCCESS} 内核模块编译成功"
 
-# 14. 安装模块（参考 amlogic-s9xxx-armbian-new/compile-kernel/tools/script/armbian_compile_kernel.sh）
+# 15. 安装模块（参考 amlogic-s9xxx-armbian-new/compile-kernel/tools/script/armbian_compile_kernel.sh）
 echo -e "${INFO} 安装内核模块..."
 make ${MAKE_SET_STRING} INSTALL_MOD_PATH="${OUTPUT_DIR}/modules" modules_install
 if [ $? -ne 0 ]; then
@@ -210,7 +232,7 @@ if [ $? -ne 0 ]; then
 fi
 echo -e "${SUCCESS} 内核模块安装成功"
 
-# 15. 去除模块调试信息（可选）
+# 16. 去除模块调试信息（可选）
 if command -v ${CROSS_COMPILE}strip >/dev/null 2>&1; then
     echo -e "${INFO} 去除模块调试信息..."
     STRIP="${CROSS_COMPILE}strip"
@@ -218,7 +240,7 @@ if command -v ${CROSS_COMPILE}strip >/dev/null 2>&1; then
     echo -e "${SUCCESS} 模块调试信息已去除"
 fi
 
-# 15.5. 安装内核头文件（参考 amlogic-s9xxx-armbian-new）
+# 16.5. 安装内核头文件（参考 amlogic-s9xxx-armbian-new）
 echo -e "${INFO} 安装内核头文件..."
 make ${MAKE_SET_STRING} headers_install INSTALL_HDR_PATH="${OUTPUT_DIR}/header"
 if [ $? -ne 0 ]; then
@@ -227,7 +249,7 @@ else
     echo -e "${SUCCESS} 内核头文件安装成功"
 fi
 
-# 16. 获取内核版本名称
+# 17. 获取内核版本名称
 KERNEL_OUTNAME=$(ls -1 "${OUTPUT_DIR}/modules/lib/modules/" 2>/dev/null | head -1)
 if [ -z "${KERNEL_OUTNAME}" ]; then
     echo -e "${WARNING} 无法确定内核版本名称，使用默认值"
@@ -235,7 +257,7 @@ if [ -z "${KERNEL_OUTNAME}" ]; then
 fi
 echo -e "${INFO} 内核版本名称: ${KERNEL_OUTNAME}"
 
-# 17. 复制内核镜像和相关文件到 boot 目录（参考 amlogic-s9xxx-armbian-new）
+# 18. 复制内核镜像和相关文件到 boot 目录（参考 amlogic-s9xxx-armbian-new）
 if [ -f "arch/${ARCH}/boot/Image" ]; then
     # 复制 Image 和 vmlinuz（参考第 698 行）
     cp -f "arch/${ARCH}/boot/Image" "${OUTPUT_DIR}/boot/vmlinuz-${KERNEL_OUTNAME}"
@@ -246,7 +268,7 @@ else
     exit 1
 fi
 
-# 17.5. 复制内核配置文件和 System.map（参考第 696-697 行）
+# 18.5. 复制内核配置文件和 System.map（参考第 696-697 行）
 if [ -f "System.map" ]; then
     cp -f "System.map" "${OUTPUT_DIR}/boot/System.map-${KERNEL_OUTNAME}"
     echo -e "${SUCCESS} 复制 System.map 完成"
@@ -257,8 +279,8 @@ if [ -f ".config" ]; then
     echo -e "${SUCCESS} 复制内核配置文件完成"
 fi
 
-# 17.6. uInitrd 由 build.sh 在宿主机通过 arm64 容器生成（在 builder 内调用 run 时 compose 的 . 会解析到错误路径，导致挂载的 /MicroSLAM-SDK 为空）
-# 18. 复制设备树文件
+# 18.6. uInitrd 由 build.sh 在宿主机通过 arm64 容器生成（在 builder 内调用 run 时 compose 的 . 会解析到错误路径，导致挂载的 /MicroSLAM-SDK 为空）
+# 19. 复制设备树文件
 if [ -d "arch/${ARCH}/boot/dts/rockchip" ]; then
     cp -f arch/${ARCH}/boot/dts/rockchip/*.dtb "${OUTPUT_DIR}/dtb/rockchip/" 2>/dev/null || true
     if [ -d "arch/${ARCH}/boot/dts/rockchip/overlay" ]; then
@@ -268,12 +290,12 @@ if [ -d "arch/${ARCH}/boot/dts/rockchip" ]; then
     echo -e "${SUCCESS} 复制设备树文件完成"
 fi
 
-# 19. 打包内核文件（参考 amlogic-s9xxx-armbian-new 格式）
+# 20. 打包内核文件（参考 amlogic-s9xxx-armbian-new 格式）
 echo -e "${INFO} 开始打包内核文件..."
 PACKAGE_DIR="${OUTPUT_DIR}/packages/${KERNEL_OUTNAME}"
 mkdir -p "${PACKAGE_DIR}"
 
-# 19.1. 打包 boot 文件（参考 amlogic-s9xxx-armbian-new 第 808-813 行）
+# 20.1. 打包 boot 文件（参考 amlogic-s9xxx-armbian-new 第 808-813 行）
 echo -e "${INFO} 打包 boot 文件..."
 cd "${OUTPUT_DIR}/boot"
 # 移除可能的 dtb-* 文件（参考第 809 行）
@@ -288,7 +310,7 @@ else
     echo -e "${WARNING} boot 目录为空，跳过打包"
 fi
 
-# 19.2. 打包 dtb 文件
+# 20.2. 打包 dtb 文件
 echo -e "${INFO} 打包 dtb 文件..."
 if [ -d "${OUTPUT_DIR}/dtb/rockchip" ] && [ "$(ls -A ${OUTPUT_DIR}/dtb/rockchip 2>/dev/null)" ]; then
     cd "${OUTPUT_DIR}/dtb"
@@ -298,7 +320,7 @@ else
     echo -e "${WARNING} 未找到 dtb 文件，跳过打包"
 fi
 
-# 19.3. 打包 modules 文件
+# 20.3. 打包 modules 文件
 echo -e "${INFO} 打包 modules 文件..."
 if [ -d "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" ]; then
     cd "${OUTPUT_DIR}/modules"
@@ -308,7 +330,7 @@ else
     echo -e "${WARNING} 未找到 modules 文件，跳过打包"
 fi
 
-# 19.4. 打包 header 文件（参考 amlogic-s9xxx-armbian-new 第 820-823 行）
+# 20.4. 打包 header 文件（参考 amlogic-s9xxx-armbian-new 第 820-823 行）
 echo -e "${INFO} 打包 header 文件..."
 # make headers_install 会在 INSTALL_HDR_PATH 下创建 usr/include 等目录
 # 参考实现直接打包 header 目录的所有内容
@@ -322,7 +344,7 @@ fi
 
 cd - > /dev/null
 
-# 19.5. 生成 sha256sums 文件
+# 20.5. 生成 sha256sums 文件
 echo -e "${INFO} 生成 sha256sums 文件..."
 if [ -d "${PACKAGE_DIR}" ] && [ "$(ls -A ${PACKAGE_DIR}/*.tar.gz 2>/dev/null)" ]; then
     cd "${PACKAGE_DIR}"
@@ -333,7 +355,7 @@ else
     echo -e "${WARNING} 未找到打包文件，跳过 sha256sums 生成"
 fi
 
-# 20. 检查输出
+# 21. 检查输出
 echo -e "${INFO} 检查输出文件..."
 if [ -f "${OUTPUT_DIR}/boot/Image" ] && [ -d "${OUTPUT_DIR}/modules/lib/modules/${KERNEL_OUTNAME}" ]; then
     echo -e "${SUCCESS} Kernel构建完成！"
