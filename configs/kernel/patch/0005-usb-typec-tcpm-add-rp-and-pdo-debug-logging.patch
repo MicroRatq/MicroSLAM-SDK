@@ -1,0 +1,82 @@
+diff --git a/drivers/usb/typec/tcpm/tcpm.c b/drivers/usb/typec/tcpm/tcpm.c
+index 66e6c5f16..fb6cafc35 100644
+--- a/drivers/usb/typec/tcpm/tcpm.c
++++ b/drivers/usb/typec/tcpm/tcpm.c
+@@ -831,9 +831,16 @@ static enum typec_cc_status tcpm_rp_cc(struct tcpm_port *port)
+ 	const u32 *src_pdo = port->src_pdo;
+ 	int nr_pdo = port->nr_src_pdo;
+ 	int i;
++	enum typec_cc_status result;
+ 
+-	if (!port->pd_supported)
++	dev_dbg(port->dev, "tcpm_rp_cc: pd_supported=%d nr_src_pdo=%d\n",
++		port->pd_supported, nr_pdo);
++
++	if (!port->pd_supported) {
++		dev_dbg(port->dev, "tcpm_rp_cc: PD not supported, using src_rp=%d\n",
++			port->src_rp);
+ 		return port->src_rp;
++	}
+ 
+ 	/*
+ 	 * Search for first entry with matching voltage.
+@@ -841,19 +848,28 @@ static enum typec_cc_status tcpm_rp_cc(struct tcpm_port *port)
+ 	 */
+ 	for (i = 0; i < nr_pdo; i++) {
+ 		const u32 pdo = src_pdo[i];
+-
+-		if (pdo_type(pdo) == PDO_TYPE_FIXED &&
+-		    pdo_fixed_voltage(pdo) == 5000) {
+-			unsigned int curr = pdo_max_current(pdo);
+-
+-			if (curr >= 3000)
+-				return TYPEC_CC_RP_3_0;
+-			else if (curr >= 1500)
+-				return TYPEC_CC_RP_1_5;
++		unsigned int volt = pdo_fixed_voltage(pdo);
++		unsigned int curr = pdo_max_current(pdo);
++
++		dev_dbg(port->dev, "tcpm_rp_cc: PDO[%d]=0x%08x type=%d volt=%umV curr=%umA\n",
++			i, pdo, pdo_type(pdo), volt, curr);
++
++		if (pdo_type(pdo) == PDO_TYPE_FIXED && volt == 5000) {
++			if (curr >= 3000) {
++				result = TYPEC_CC_RP_3_0;
++				dev_info(port->dev, "tcpm_rp_cc: Found 5V PDO with %umA -> RP_3_0\n", curr);
++				return result;
++			} else if (curr >= 1500) {
++				result = TYPEC_CC_RP_1_5;
++				dev_info(port->dev, "tcpm_rp_cc: Found 5V PDO with %umA -> RP_1_5\n", curr);
++				return result;
++			}
++			dev_info(port->dev, "tcpm_rp_cc: Found 5V PDO with %umA -> RP_DEF\n", curr);
+ 			return TYPEC_CC_RP_DEF;
+ 		}
+ 	}
+ 
++	dev_info(port->dev, "tcpm_rp_cc: No 5V FIXED PDO found -> RP_DEF\n");
+ 	return TYPEC_CC_RP_DEF;
+ }
+ 
+@@ -6260,7 +6276,9 @@ static int tcpm_fw_get_caps(struct tcpm_port *port,
+ 
+ 	/* Get Source PDOs for the PD port or Source Rp value for the non-PD port */
+ 	if (port->pd_supported) {
++		int i;
+ 		ret = fwnode_property_count_u32(fwnode, "source-pdos");
++		dev_info(port->dev, "tcpm_fw_get_caps: source-pdos count=%d\n", ret);
+ 		if (ret == 0)
+ 			return -EINVAL;
+ 		else if (ret < 0)
+@@ -6269,6 +6287,11 @@ static int tcpm_fw_get_caps(struct tcpm_port *port,
+ 		port->nr_src_pdo = min(ret, PDO_MAX_OBJECTS);
+ 		ret = fwnode_property_read_u32_array(fwnode, "source-pdos",
+ 						     port->src_pdo, port->nr_src_pdo);
++		if (!ret) {
++			for (i = 0; i < port->nr_src_pdo; i++)
++				dev_info(port->dev, "tcpm_fw_get_caps: src_pdo[%d]=0x%08x\n",
++					 i, port->src_pdo[i]);
++		}
+ 		if (ret)
+ 			return ret;
+ 		ret = tcpm_validate_caps(port, port->src_pdo, port->nr_src_pdo);

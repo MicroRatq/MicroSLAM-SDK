@@ -51,8 +51,6 @@
 	vcc5v0_usbc: vcc5v0-usbc-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc5v0_usbc";
-		regulator-boot-on;
-		regulator-always-on;
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		enable-active-high;
@@ -155,11 +153,11 @@
 	// };
 
 	hdmi0_sound: hdmi0-sound {
-		status = "okay";
+		status = "disabled";
 	};
 
 	hdmi1_sound: hdmi1-sound {
-		status = "okay";
+		status = "disabled";
 	};
 
 	dp0_sound: dp0-sound {
@@ -342,6 +340,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&usbc0_int>;
 		vbus-supply = <&vcc5v0_usbc>;
+		/* 避免冷启动后 attach/detach 唤醒不可靠导致中断过少 */
+		hynetek,disable-osc24m-power-saving;
 		status = "okay";
 
 		ports {
@@ -361,12 +361,15 @@
 			label = "USB-C";
 			data-role = "dual";
 			power-role = "dual";
-			try-power-role = "sink";
+			try-power-role = "source";
 			op-sink-microwatt = <1000000>;
 			sink-pdos =
 				<PDO_FIXED(5000, 1000, PDO_FIXED_USB_COMM)>;
 			source-pdos =
 				<PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
+
+			/* DP Alt Mode HPD 关联 */
+			displayport = <&dp0>;
 
 			altmodes {
 				#address-cells = <1>;
@@ -700,7 +703,7 @@
 
 	route {
 		route_hdmi0: route-hdmi0 {
-			status = "okay";
+			status = "disabled";
 			logo,uboot = "boot.bmp";
 			logo,kernel = "boot.bmp";
 			logo,mode = "center";
@@ -709,7 +712,7 @@
 		};
 
 		route_hdmi1: route-hdmi1 {
-			status = "okay";
+			status = "disabled";
 			logo,uboot = "boot.bmp";
 			logo,kernel = "boot.bmp";
 			logo,mode = "center";
@@ -720,20 +723,20 @@
 };
 
 &hdptxphy_hdmi0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdptxphy_hdmi1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdmi0 {
-	status = "okay";
+	status = "disabled";
 	cec-enable = "true";
 };
 
 &hdmi0_in_vp0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdmi0_in_vp1 {
@@ -745,11 +748,11 @@
 };
 
 &hdmi0_sound {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdmi1 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&hdmim0_tx1_cec &hdmim0_tx1_hpd &hdmim1_tx1_scl &hdmim1_tx1_sda>;
 	cec-enable = "true";
@@ -760,7 +763,7 @@
 };
 
 &hdmi1_in_vp1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdmi1_in_vp2 {
@@ -768,7 +771,7 @@
 };
 
 &hdmi1_sound {
-	status = "okay";
+	status = "disabled";
 };
 
 /* Should work with at least 128MB cma reserved above. */
@@ -785,11 +788,11 @@
 // };
 
 &hdptxphy_hdmi0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdptxphy_hdmi1 {
-	status = "okay";
+	status = "disabled";
 };
 
 // &i2s5_8ch {
@@ -964,6 +967,7 @@
 
 &dp0 {
 	status = "okay";
+	svid = <0xff01>;
 };
 
 &dp0_in_vp2 {

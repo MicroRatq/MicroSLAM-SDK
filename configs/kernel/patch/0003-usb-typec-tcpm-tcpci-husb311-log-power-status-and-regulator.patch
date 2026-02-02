@@ -1,0 +1,65 @@
+diff --git a/drivers/usb/typec/tcpm/tcpci_husb311.c b/drivers/usb/typec/tcpm/tcpci_husb311.c
+index b52343687..841536b3c 100644
+--- a/drivers/usb/typec/tcpm/tcpci_husb311.c
++++ b/drivers/usb/typec/tcpm/tcpci_husb311.c
+@@ -159,10 +159,16 @@ static int husb311_set_vbus(struct tcpci *tcpci, struct tcpci_data *tdata,
+ {
+ 	struct husb311_chip *chip = tdata_to_husb311(tdata);
+ 	int ret = 0;
++	int en_before = -1, en_after = -1;
++	u8 pwr_status = 0xff;
++	int pwr_ret;
+ 
+ 	dev_info(chip->dev, "set_vbus: on=%d charge=%d (cur vbus_on=%d charge_on=%d)\n",
+ 		 on, charge, chip->vbus_on, chip->charge_on);
+ 
++	if (chip->vbus)
++		en_before = regulator_is_enabled(chip->vbus);
++
+ 	mutex_lock(&chip->lock);
+ 
+ 	if (chip->vbus_on == on) {
+@@ -194,6 +200,17 @@ static int husb311_set_vbus(struct tcpci *tcpci, struct tcpci_data *tdata,
+ 
+ done:
+ 	mutex_unlock(&chip->lock);
++
++	if (chip->vbus)
++		en_after = regulator_is_enabled(chip->vbus);
++
++	pwr_ret = husb311_read8(chip, TCPC_POWER_STATUS, &pwr_status);
++	if (pwr_ret < 0)
++		dev_err(chip->dev, "set_vbus: failed to read TCPC_POWER_STATUS (%d)\n", pwr_ret);
++
++	dev_info(chip->dev,
++		 "set_vbus: regulator enabled %d -> %d, POWER_STATUS=0x%02x (ret=%d)\n",
++		 en_before, en_after, pwr_status, pwr_ret);
+ 	return ret;
+ }
+ 
+@@ -205,6 +222,8 @@ static irqreturn_t husb311_irq(int irq, void *dev_id)
+ 	u8 status;
+ 	u16 alert = 0, alert_after = 0;
+ 	u16 alert_mask = 0;
++	u8 pwr_status = 0xff;
++	int pwr_ret;
+ 	int ret;
+ 	irqreturn_t irqret;
+ 
+@@ -215,9 +234,14 @@ static irqreturn_t husb311_irq(int irq, void *dev_id)
+ 	if (ret < 0)
+ 		dev_err(chip->dev, "irq: failed to read TCPC_ALERT_MASK (%d)\n", ret);
+ 
++	pwr_ret = husb311_read8(chip, TCPC_POWER_STATUS, &pwr_status);
++	if (pwr_ret < 0)
++		dev_err(chip->dev, "irq: failed to read TCPC_POWER_STATUS (%d)\n", pwr_ret);
++
+ 	husb311_read8(chip, TCPC_ALERT, &status);
+-	dev_info(chip->dev, "irq=%d: ALERT=0x%04x (lo=0x%02x) MASK=0x%04x\n",
+-		 irq, alert, status, alert_mask);
++	dev_info(chip->dev,
++		 "irq=%d: ALERT=0x%04x (lo=0x%02x) MASK=0x%04x POWER_STATUS=0x%02x (ret=%d)\n",
++		 irq, alert, status, alert_mask, pwr_status, pwr_ret);
+ 
+ 	/*
+ 	 * If husb311 detects one of CC is Rp, let do clear the another CC

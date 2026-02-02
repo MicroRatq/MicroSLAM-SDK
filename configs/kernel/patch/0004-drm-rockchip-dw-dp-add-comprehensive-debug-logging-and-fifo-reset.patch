@@ -1,0 +1,355 @@
+diff --git a/drivers/gpu/drm/rockchip/dw-dp.c b/drivers/gpu/drm/rockchip/dw-dp.c
+index a29212f42..f9c460126 100644
+--- a/drivers/gpu/drm/rockchip/dw-dp.c
++++ b/drivers/gpu/drm/rockchip/dw-dp.c
+@@ -1634,6 +1634,43 @@ static int dw_dp_debugfs_init(struct dw_dp *dp)
+ 	return 0;
+ }
+ 
++static void dw_dp_connector_oob_hotplug_event(struct drm_connector *connector)
++{
++	struct dw_dp *dp = connector_to_dp(connector);
++	bool link_trained;
++
++	mutex_lock(&dp->irq_lock);
++	link_trained = dp->link.train.clock_recovered && dp->link.train.channel_equalized;
++
++	dev_info(dp->dev, "oob_hotplug: status=%d cr=%d eq=%d pending=%d trained=%d\n",
++		 dp->hotplug.status, dp->link.train.clock_recovered,
++		 dp->link.train.channel_equalized, work_pending(&dp->hpd_work),
++		 link_trained);
++
++	/*
++	 * OOB hotplug event from typec displayport altmode driver.
++	 * Trigger HPD work if:
++	 * 1. No work is already pending, AND
++	 * 2. Either status is false OR link is not trained
++	 */
++	if (work_pending(&dp->hpd_work)) {
++		dev_info(dp->dev, "oob_hotplug: work already pending, skip\n");
++		mutex_unlock(&dp->irq_lock);
++		return;
++	}
++
++	if (!dp->hotplug.status || !link_trained) {
++		dev_info(dp->dev, "oob_hotplug: triggering HPD work (status=%d trained=%d)\n",
++			 dp->hotplug.status, link_trained);
++		dp->hotplug.long_hpd = true;
++		dp->hotplug.status = true;
++		schedule_work(&dp->hpd_work);
++	} else {
++		dev_info(dp->dev, "oob_hotplug: already connected and trained, skip\n");
++	}
++	mutex_unlock(&dp->irq_lock);
++}
++
+ static const struct drm_connector_funcs dw_dp_connector_funcs = {
+ 	.detect			= dw_dp_connector_detect,
+ 	.fill_modes		= drm_helper_probe_single_connector_modes,
+@@ -1644,6 +1681,7 @@ static const struct drm_connector_funcs dw_dp_connector_funcs = {
+ 	.atomic_destroy_state	= dw_dp_atomic_connector_destroy_state,
+ 	.atomic_get_property	= dw_dp_atomic_connector_get_property,
+ 	.atomic_set_property	= dw_dp_atomic_connector_set_property,
++	.oob_hotplug_event	= dw_dp_connector_oob_hotplug_event,
+ };
+ 
+ static int dw_dp_update_hdr_property(struct drm_connector *connector)
+@@ -4061,6 +4099,9 @@ static void dw_dp_link_disable(struct dw_dp *dp)
+ {
+ 	struct dw_dp_link *link = &dp->link;
+ 
++	dev_info(dp->dev, "link_disable: cr=%d eq=%d\n",
++		 link->train.clock_recovered, link->train.channel_equalized);
++
+ 	if (dw_dp_detect(dp))
+ 		dw_dp_link_power_down(dp);
+ 
+@@ -4070,6 +4111,8 @@ static void dw_dp_link_disable(struct dw_dp *dp)
+ 
+ 	link->train.clock_recovered = false;
+ 	link->train.channel_equalized = false;
++
++	dev_info(dp->dev, "link_disable: complete\n");
+ }
+ 
+ static void dw_dp_sdp_disalbe(struct dw_dp *dp, int stream_id)
+@@ -4440,6 +4483,11 @@ static int dw_dp_connector_init(struct dw_dp *dp)
+ 		return ret;
+ 	}
+ 
++	/* Set fwnode for oob_hotplug_event from typec displayport altmode
++	 * Must be set AFTER drm_connector_init() as it does memset() on connector
++	 */
++	connector->fwnode = dev_fwnode(dp->dev);
++
+ 	drm_connector_helper_add(connector,
+ 				 &dw_dp_connector_helper_funcs);
+ 
+@@ -4636,22 +4684,33 @@ static int dw_dp_link_enable(struct dw_dp *dp)
+ {
+ 	int ret;
+ 
++	dev_info(dp->dev, "link_enable: status=%d cr=%d eq=%d\n",
++		 dp->hotplug.status, dp->link.train.clock_recovered,
++		 dp->link.train.channel_equalized);
++
+ 	dw_dp_limit_max_link_rate(dp);
+ 
+ 	ret = phy_power_on(dp->phy);
+-	if (ret)
++	if (ret) {
++		dev_err(dp->dev, "link_enable: phy_power_on failed: %d\n", ret);
+ 		return ret;
++	}
+ 
+ 	ret = dw_dp_link_power_up(dp);
+-	if (ret < 0)
++	if (ret < 0) {
++		dev_err(dp->dev, "link_enable: link_power_up failed: %d\n", ret);
+ 		return ret;
++	}
+ 
+ 	ret = dw_dp_link_train(dp);
+ 	if (ret < 0) {
+-		dev_err(dp->dev, "link training failed: %d\n", ret);
++		dev_err(dp->dev, "link_enable: link_train failed: %d\n", ret);
+ 		return ret;
+ 	}
+ 
++	dev_info(dp->dev, "link_enable: success, cr=%d eq=%d\n",
++		 dp->link.train.clock_recovered, dp->link.train.channel_equalized);
++
+ 	return 0;
+ }
+ 
+@@ -4664,6 +4723,10 @@ static void dw_dp_bridge_atomic_enable(struct drm_bridge *bridge,
+ 	struct drm_connector_state *conn_state;
+ 	int ret;
+ 
++	dev_info(dp->dev, "bridge_atomic_enable: status=%d cr=%d eq=%d\n",
++		 dp->hotplug.status, dp->link.train.clock_recovered,
++		 dp->link.train.channel_equalized);
++
+ 	connector = drm_atomic_get_new_connector_for_encoder(state, bridge->encoder);
+ 	if (!connector) {
+ 		dev_err(dp->dev, "failed to get connector\n");
+@@ -4678,17 +4741,20 @@ static void dw_dp_bridge_atomic_enable(struct drm_bridge *bridge,
+ 
+ 	set_bit(0, dp->sdp_reg_bank);
+ 
++	dev_info(dp->dev, "bridge_atomic_enable: calling link_enable\n");
+ 	ret = dw_dp_link_enable(dp);
+ 	if (ret < 0) {
+ 		dev_err(dp->dev, "failed to enable link: %d\n", ret);
+ 		return;
+ 	}
++	dev_info(dp->dev, "bridge_atomic_enable: link_enable succeeded\n");
+ 
+ 	ret = dw_dp_video_enable(dp, &dp->video, 0);
+ 	if (ret < 0) {
+ 		dev_err(dp->dev, "failed to enable video: %d\n", ret);
+ 		return;
+ 	}
++	dev_info(dp->dev, "bridge_atomic_enable: video_enable succeeded\n");
+ 
+ 	dw_dp_enable_vop_gate(dp, bridge->encoder->crtc, dp->id, true);
+ 	if (conn_state->content_protection == DRM_MODE_CONTENT_PROTECTION_DESIRED)
+@@ -4699,6 +4765,8 @@ static void dw_dp_bridge_atomic_enable(struct drm_bridge *bridge,
+ 
+ 	extcon_set_state_sync(dp->audio->extcon, EXTCON_DISP_DP, true);
+ 	dw_dp_audio_handle_plugged_change(dp->audio, true);
++
++	dev_info(dp->dev, "bridge_atomic_enable: complete\n");
+ }
+ 
+ static void dw_dp_bridge_atomic_disable(struct drm_bridge *bridge,
+@@ -4706,6 +4774,10 @@ static void dw_dp_bridge_atomic_disable(struct drm_bridge *bridge,
+ {
+ 	struct dw_dp *dp = bridge_to_dp(bridge);
+ 
++	dev_info(dp->dev, "bridge_atomic_disable: status=%d cr=%d eq=%d\n",
++		 dp->hotplug.status, dp->link.train.clock_recovered,
++		 dp->link.train.channel_equalized);
++
+ 	if (dp->panel)
+ 		drm_panel_disable(dp->panel);
+ 
+@@ -4718,6 +4790,8 @@ static void dw_dp_bridge_atomic_disable(struct drm_bridge *bridge,
+ 
+ 	extcon_set_state_sync(dp->audio->extcon, EXTCON_DISP_DP, false);
+ 	dw_dp_audio_handle_plugged_change(dp->audio, false);
++
++	dev_info(dp->dev, "bridge_atomic_disable: complete\n");
+ }
+ 
+ static bool dw_dp_detect_dpcd(struct dw_dp *dp)
+@@ -4755,19 +4829,30 @@ static enum drm_connector_status dw_dp_bridge_detect(struct drm_bridge *bridge)
+ {
+ 	struct dw_dp *dp = bridge_to_dp(bridge);
+ 	enum drm_connector_status status = connector_status_connected;
++	bool hpd_detect, dpcd_detect;
++
++	dev_info(dp->dev, "bridge_detect: status=%d cr=%d eq=%d\n",
++		 dp->hotplug.status, dp->link.train.clock_recovered,
++		 dp->link.train.channel_equalized);
+ 
+ 	if (dp->panel)
+ 		drm_panel_prepare(dp->panel);
+ 
+-	if (!dw_dp_detect(dp)) {
++	hpd_detect = dw_dp_detect(dp);
++	if (!hpd_detect) {
++		dev_info(dp->dev, "bridge_detect: hpd detect failed\n");
+ 		status = connector_status_disconnected;
+ 		goto out;
+ 	}
+ 
+-	if (!dw_dp_detect_dpcd(dp)) {
++	dpcd_detect = dw_dp_detect_dpcd(dp);
++	if (!dpcd_detect) {
++		dev_info(dp->dev, "bridge_detect: dpcd detect failed\n");
+ 		status = connector_status_disconnected;
+ 		goto out;
+ 	}
++	dev_info(dp->dev, "bridge_detect: hpd=%d dpcd=%d -> connected\n",
++		 hpd_detect, dpcd_detect);
+ 
+ 	if (dp->next_bridge) {
+ 		struct drm_bridge *next_bridge = dp->next_bridge;
+@@ -5302,7 +5387,9 @@ static void dw_dp_hpd_work(struct work_struct *work)
+ 	long_hpd = dp->hotplug.long_hpd;
+ 	mutex_unlock(&dp->irq_lock);
+ 
+-	dw_dp_dbg(dp, "got hpd irq - %s\n", long_hpd ? "long" : "short");
++	dev_info(dp->dev, "hpd_work: %s hpd, status=%d cr=%d eq=%d\n",
++		 long_hpd ? "long" : "short", dp->hotplug.status,
++		 dp->link.train.clock_recovered, dp->link.train.channel_equalized);
+ 
+ 	if (!long_hpd) {
+ 		phy_power_on(dp->phy);
+@@ -5327,10 +5414,14 @@ static void dw_dp_hpd_work(struct work_struct *work)
+ 
+ 		ret = dw_dp_link_retrain(dp);
+ 		if (ret)
+-			dev_warn(dp->dev, "Retrain link failed\n");
++			dev_warn(dp->dev, "hpd_work: Retrain link failed: %d\n", ret);
++		else
++			dev_info(dp->dev, "hpd_work: link retrain succeeded\n");
+ 		phy_power_off(dp->phy);
+ 	} else {
++		dev_info(dp->dev, "hpd_work: calling drm_helper_hpd_irq_event\n");
+ 		drm_helper_hpd_irq_event(dp->bridge.dev);
++		dev_info(dp->dev, "hpd_work: drm_helper_hpd_irq_event returned\n");
+ 	}
+ }
+ 
+@@ -5365,6 +5456,63 @@ static void dw_dp_handle_hpd_event(struct dw_dp *dp)
+ 	schedule_work(&dp->hpd_work);
+ }
+ 
++/*
++ * Some monitors / link partners can end up in a bad state where video keeps
++ * flowing on the DP link but the sink is no longer consuming it correctly
++ * (e.g. after a failed or marginal link training). The controller reports
++ * this as VIDEO_FIFO_OVERFLOW_STREAMx and will continue to generate
++ * interrupts until the condition is cleared.
++ *
++ * Force a full link re-initialization by resetting link state to trigger
++ * complete modeset cycle including link training.
++ */
++static void dw_dp_handle_video_fifo_overflow(struct dw_dp *dp, u32 streams)
++{
++	bool schedule = false;
++
++	mutex_lock(&dp->irq_lock);
++
++	dev_info(dp->dev, "fifo_overflow: streams=0x%x status=%d long_hpd=%d cr=%d eq=%d pending=%d\n",
++		 streams, dp->hotplug.status, dp->hotplug.long_hpd,
++		 dp->link.train.clock_recovered, dp->link.train.channel_equalized,
++		 work_pending(&dp->hpd_work));
++
++	if (!dp->hotplug.status) {
++		dev_info(dp->dev, "fifo_overflow: link already inactive, skip\n");
++	} else if (work_pending(&dp->hpd_work)) {
++		dev_info(dp->dev, "fifo_overflow: HPD work pending, skip\n");
++	} else {
++		/*
++		 * Force full re-initialization: set status=false first to
++		 * ensure connector_detect returns disconnected, then
++		 * trigger reconnect to force full modeset.
++		 */
++		dp->hotplug.status = false;
++		dp->link.train.clock_recovered = false;
++		dp->link.train.channel_equalized = false;
++		schedule = true;
++		dev_info(dp->dev, "fifo_overflow: forcing link reset\n");
++	}
++
++	mutex_unlock(&dp->irq_lock);
++
++	if (schedule) {
++		/* First trigger disconnect detection */
++		dev_info(dp->dev, "fifo_overflow: triggering disconnect event\n");
++		drm_helper_hpd_irq_event(dp->bridge.dev);
++
++		/* Wait for PHY and sink to stabilize after overflow */
++		msleep(100);
++		dev_info(dp->dev, "fifo_overflow: scheduling reconnect\n");
++		mutex_lock(&dp->irq_lock);
++		dp->hotplug.long_hpd = true;
++		dp->hotplug.status = true;
++		mutex_unlock(&dp->irq_lock);
++		schedule_work(&dp->hpd_work);
++		dev_info(dp->dev, "fifo_overflow: reconnect scheduled\n");
++	}
++}
++
+ static irqreturn_t dw_dp_irq_handler(int irq, void *data)
+ {
+ 	struct dw_dp *dp = data;
+@@ -5390,6 +5538,7 @@ static irqreturn_t dw_dp_irq_handler(int irq, void *data)
+ 		dev_err_ratelimited(dp->dev, "video fifo overflow stream0\n");
+ 		regmap_write(dp->regmap, DPTX_GENERAL_INTERRUPT,
+ 			     VIDEO_FIFO_OVERFLOW_STREAM0);
++		dw_dp_handle_video_fifo_overflow(dp, VIDEO_FIFO_OVERFLOW_STREAM0);
+ 	}
+ 
+ 	if (value & VIDEO_FIFO_OVERFLOW_STREAM1) {
+@@ -6021,27 +6170,33 @@ static int dw_dp_typec_mux_set(struct typec_mux_dev *mux, struct typec_mux_state
+ {
+ 	struct dw_dp *dp = typec_mux_get_drvdata(mux);
+ 
++	dev_info(dp->dev, "typec_mux_set: alt=%p svid=0x%04x data=%p\n",
++		 state->alt, state->alt ? state->alt->svid : 0, state->data);
++
+ 	mutex_lock(&dp->irq_lock);
+ 	if (state->alt && state->alt->svid == USB_TYPEC_DP_SID) {
+ 		struct typec_displayport_data *data = state->data;
+ 
+ 		if (!data) {
+-			dw_dp_dbg(dp, "hotunplug from the usbdp\n");
++			dev_info(dp->dev, "typec_mux_set: hotunplug from the usbdp\n");
+ 			dp->hotplug.long_hpd = true;
+ 			dp->hotplug.status = false;
+ 			schedule_work(&dp->hpd_work);
+ 		} else if (data->status & DP_STATUS_IRQ_HPD) {
+-			dw_dp_dbg(dp, "IRQ from the usbdp\n");
++			dev_info(dp->dev, "typec_mux_set: IRQ from the usbdp (status=0x%02x)\n",
++				 data->status);
+ 			dp->hotplug.long_hpd = false;
+ 			dp->hotplug.status = true;
+ 			schedule_work(&dp->hpd_work);
+ 		} else if (data->status & DP_STATUS_HPD_STATE) {
+-			dw_dp_dbg(dp, "hotplug from the usbdp\n");
++			dev_info(dp->dev, "typec_mux_set: hotplug from the usbdp (status=0x%02x)\n",
++				 data->status);
+ 			dp->hotplug.long_hpd = true;
+ 			dp->hotplug.status = true;
+ 			schedule_work(&dp->hpd_work);
+ 		} else {
+-			dw_dp_dbg(dp, "hotunplug from the usbdp\n");
++			dev_info(dp->dev, "typec_mux_set: hotunplug from the usbdp (status=0x%02x)\n",
++				 data->status);
+ 			dp->hotplug.long_hpd = true;
+ 			dp->hotplug.status = false;
+ 			schedule_work(&dp->hpd_work);

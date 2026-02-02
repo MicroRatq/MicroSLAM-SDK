@@ -1,0 +1,48 @@
+diff --git a/drivers/usb/typec/tcpm/tcpci_husb311.c b/drivers/usb/typec/tcpm/tcpci_husb311.c
+index 31e8e28eb..c6e2f45be 100644
+--- a/drivers/usb/typec/tcpm/tcpci_husb311.c
++++ b/drivers/usb/typec/tcpm/tcpci_husb311.c
+@@ -37,6 +37,7 @@ struct husb311_chip {
+ 	bool charge_on;
+ 	bool suspended;
+ 	bool wakeup;
++	bool disable_osc24m_power_saving;
+ };
+ 
+ static int husb311_read8(struct husb311_chip *chip, unsigned int reg, u8 *val)
+@@ -97,7 +98,15 @@ static void husb311_pm_work(struct work_struct *work)
+ 		if (chip->suspended)
+ 			goto exit;
+ 
+-		husb311_disable_osc24m(chip);
++		/*
++		 * Disabling OSC24M is a power-saving feature.
++		 *
++		 * However, on some boards it can prevent reliable wake-up on
++		 * attach/detach events (CC change) after cold boot, resulting
++		 * in very few interrupts and a stuck TCPM state.
++		 */
++		if (!chip->disable_osc24m_power_saving)
++			husb311_disable_osc24m(chip);
+ 		chip->suspended = 1;
+ 	} else {
+ 		if (chip->suspended)
+@@ -301,6 +310,8 @@ static int husb311_probe(struct i2c_client *client,
+ 	}
+ 
+ 	chip->wakeup = device_property_read_bool(chip->dev, "wakeup-source");
++	chip->disable_osc24m_power_saving =
++		device_property_read_bool(chip->dev, "hynetek,disable-osc24m-power-saving");
+ 	device_init_wakeup(chip->dev, true);
+ 
+ 	return 0;
+@@ -338,7 +349,8 @@ static int husb311_pm_suspend(struct device *dev)
+ 
+ 	if (!chip->suspended) {
+ 		chip->suspended = 1;
+-		husb311_disable_osc24m(chip);
++		if (!chip->disable_osc24m_power_saving)
++			husb311_disable_osc24m(chip);
+ 	}
+ 
+ 	return 0;
