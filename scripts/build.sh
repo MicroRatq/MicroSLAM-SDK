@@ -16,6 +16,20 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # 加载公共函数库
 source "${SCRIPT_DIR}/common.sh"
 
+# 清理函数：在脚本退出时修复 repos 目录权限
+# Docker 容器内以 root 运行可能导致目录权限问题，需要恢复可执行权限
+cleanup_repos_permissions() {
+    local repos_dir="${PROJECT_ROOT}/repos"
+    local output_dir="${PROJECT_ROOT}/output"
+    echo -e "${INFO} 修复 repos/output 目录权限..."
+    [ -d "${repos_dir}" ] && chmod -R 775 "${repos_dir}" 2>/dev/null || true
+    [ -d "${output_dir}" ] && chmod -R 775 "${output_dir}" 2>/dev/null || true
+    echo -e "${SUCCESS} repos/output 目录权限已修复"
+}
+
+# 设置 trap：在脚本退出时（无论成功、失败或 Ctrl+C）执行清理
+trap cleanup_repos_permissions EXIT
+
 # 路径配置
 OUTPUT_DIR="${PROJECT_ROOT}/output"
 

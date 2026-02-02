@@ -143,20 +143,53 @@ fi
 # 11. 应用内核补丁（如果存在）
 if [ -d "${CONFIGS_DIR}/kernel/patch" ]; then
     echo -e "${INFO} 检查内核补丁..."
+
+    # 防止上次 patch 失败留下 .rej / 半应用状态，导致后续构建反复失败：
+    # - 仅重置“补丁涉及的源码文件”，不影响未跟踪的构建产物（支持增量编译）
+    if [ -d ".git" ]; then
+        PATCH_TARGETS=()
+        while IFS= read -r p; do
+            # 过滤空行与 /dev/null（新增/删除文件场景）
+            if [ -n "${p}" ] && [ "${p}" != "/dev/null" ]; then
+                PATCH_TARGETS+=("${p}")
+            fi
+        done < <(
+            for patch_file in "${CONFIGS_DIR}/kernel/patch"/*.patch; do
+                [ -f "${patch_file}" ] || continue
+                # 从 unified diff 中提取目标文件路径：+++ b/<path>
+                sed -n 's|^+++ b/||p' "${patch_file}" | cut -d$'\t' -f1 | cut -d' ' -f1
+            done | sort -u
+        )
+
+        if [ ${#PATCH_TARGETS[@]} -gt 0 ]; then
+            echo -e "${INFO} 重置补丁相关源码文件..."
+            if ! git checkout -- "${PATCH_TARGETS[@]}" >/dev/null 2>&1; then
+                echo -e "${ERROR} git checkout 重置补丁相关源码文件失败（可能存在 git 锁或仓库异常）"
+                exit 1
+            fi
+            for p in "${PATCH_TARGETS[@]}"; do
+                rm -f "${p}.rej" "${p}.orig" 2>/dev/null || true
+            done
+        fi
+    fi
+
     for patch_file in "${CONFIGS_DIR}/kernel/patch"/*.patch; do
         if [ -f "${patch_file}" ]; then
             patch_name=$(basename "${patch_file}")
-            # 检查补丁是否已应用（使用 --dry-run 和 -R 反向检查）
-            if patch -p1 -R --dry-run < "${patch_file}" >/dev/null 2>&1; then
+            # 使用 git apply 进行幂等检测与应用（patch -R 可能会 “Ignoring -R” 导致误判）
+            if git apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
                 echo -e "${INFO} 补丁 ${patch_name} 已应用，跳过"
-            else
+            elif git apply --check "${patch_file}" >/dev/null 2>&1; then
                 echo -e "${INFO} 应用补丁 ${patch_name}..."
-                if patch -p1 < "${patch_file}"; then
+                if git apply "${patch_file}"; then
                     echo -e "${SUCCESS} 补丁 ${patch_name} 应用成功"
                 else
                     echo -e "${ERROR} 补丁 ${patch_name} 应用失败"
                     exit 1
                 fi
+            else
+                echo -e "${ERROR} 补丁 ${patch_name} 无法应用（也无法反向检查），请确认内核源码版本是否匹配"
+                exit 1
             fi
         fi
     done
