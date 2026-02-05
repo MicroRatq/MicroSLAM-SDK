@@ -147,6 +147,11 @@ if [ -d "${CONFIGS_DIR}/kernel/patch" ]; then
     # 防止上次 patch 失败留下 .rej / 半应用状态，导致后续构建反复失败：
     # - 仅重置“补丁涉及的源码文件”，不影响未跟踪的构建产物（支持增量编译）
     if [ -d ".git" ]; then
+        # Docker/不同用户下 Git 会报 dubious ownership，将当前仓库加入 safe.directory
+        git config --global --add safe.directory "$(pwd)"
+        # 清除可能存在的 git 锁，避免因上次中断导致 checkout 失败
+        rm -f .git/index.lock .git/HEAD.lock 2>/dev/null || true
+
         PATCH_TARGETS=()
         while IFS= read -r p; do
             # 过滤空行与 /dev/null（新增/删除文件场景）
@@ -163,8 +168,13 @@ if [ -d "${CONFIGS_DIR}/kernel/patch" ]; then
 
         if [ ${#PATCH_TARGETS[@]} -gt 0 ]; then
             echo -e "${INFO} 重置补丁相关源码文件..."
-            if ! git checkout -- "${PATCH_TARGETS[@]}" >/dev/null 2>&1; then
+            set +e
+            checkout_err=$(git checkout -- "${PATCH_TARGETS[@]}" 2>&1)
+            checkout_ret=$?
+            set -e
+            if [ ${checkout_ret} -ne 0 ]; then
                 echo -e "${ERROR} git checkout 重置补丁相关源码文件失败（可能存在 git 锁或仓库异常）"
+                [ -n "${checkout_err}" ] && echo -e "${ERROR} git 输出: ${checkout_err}"
                 exit 1
             fi
             for p in "${PATCH_TARGETS[@]}"; do

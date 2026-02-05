@@ -67,8 +67,13 @@ if [ ! -d "${ARMBIAN_DIR}" ]; then
 fi
 
 # 3. 应用补丁和配置（从 configs 生成所有 userpatches 内容）
+# 若 BUILD_DESKTOP=yes 则传入 --desktop，使生成的板级配置包含 DESKTOP_ENVIRONMENT（否则子进程无法继承未 export 的变量）
 echo -e "${INFO} 应用 MicroSLAM 补丁和配置..."
-"${SCRIPT_DIR}/apply-patches.sh"
+if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+    "${SCRIPT_DIR}/apply-patches.sh" --desktop
+else
+    "${SCRIPT_DIR}/apply-patches.sh"
+fi
 
 # 4. 创建必要的目录
 echo -e "${INFO} 创建必要的构建目录..."
@@ -94,6 +99,45 @@ fi
 
 # 加载 Armbian 核心库
 source "${SRC}/lib/single.sh"
+
+# 覆盖 rootfs 打包函数：保留 /home 内容（不修改 Armbian 源码）
+function create_new_rootfs_cache_tarball() {
+    # validate cache_fname is set
+    [[ -n "${cache_fname}" ]] || exit_with_error "create_new_rootfs_cache_tarball: cache_fname is not set"
+    # validate SDCARD is set
+    [[ -n "${SDCARD}" ]] || exit_with_error "create_new_rootfs_cache_tarball: SDCARD is not set"
+    # validate cache_name is set
+    [[ -n "${cache_name}" ]] || exit_with_error "create_new_rootfs_cache_tarball: cache_name is not set"
+
+    # Show the disk space usage of the rootfs; use only host-side tools, as qemu binary is already undeployed from chroot
+    display_alert "Disk space usage of rootfs" "${RELEASE}:: ${cache_name}" "info"
+    run_host_command_logged "cd ${SDCARD} && " du -h -d 4 -x "." "| sort -h | tail -20"
+    wait_for_disk_sync "after disk-space usage report of rootfs"
+
+    declare compression_ratio_rootfs="${ROOTFS_COMPRESSION_RATIO:-"5"}"
+
+    display_alert "zstd tarball of rootfs" "${RELEASE}:: ${cache_name} :: compression ${compression_ratio_rootfs}" "info"
+    tar cp --xattrs --directory="$SDCARD"/ --exclude='./dev/*' --exclude='./proc/*' --exclude='./run/*' \
+        --exclude='./tmp/*' --exclude='./sys/*' --exclude='./root/*' . |
+        pv -p -b -r -s "$(du -sb "$SDCARD"/ | cut -f1)" -N "$(logging_echo_prefix_for_pv "store_rootfs") $cache_name" |
+        zstdmt "-${compression_ratio_rootfs}" -c > "${cache_fname}"
+
+    declare -a pv_tar_zstdmt_pipe_status=("${PIPESTATUS[@]}") # capture and the pipe_status array from PIPESTATUS
+    declare one_pipe_status
+    for one_pipe_status in "${pv_tar_zstdmt_pipe_status[@]}"; do
+        if [[ "$one_pipe_status" != "0" ]]; then
+            exit_with_error "create_new_rootfs_cache_tarball: compress: ${cache_fname} failed (${pv_tar_zstdmt_pipe_status[*]}) - out of disk space?"
+        fi
+    done
+
+    wait_for_disk_sync "after zstd tarball rootfs"
+
+    # get the human readable size of the cache
+    local cache_size
+    cache_size=$(du -sh "${cache_fname}" | cut -f1)
+
+    display_alert "rootfs cache created" "${cache_fname} [${cache_size}]" "info"
+}
 
 # 6. 设置 Armbian 构建系统必需的目录变量（必须在配置之前设置）
 echo -e "${INFO} 设置 Armbian 构建系统目录变量..."
@@ -137,6 +181,7 @@ add_cleanup_handler trap_handler_cleanup_logging || true
 add_cleanup_handler trap_handler_reset_output_owner || true
 
 # 7. 设置环境变量（强制跳过 uboot/kernel，必须在配置之前设置）
+# 注意：这些变量必须在 source lib/single.sh 之后、prep_conf 之前设置，确保 Armbian 配置系统能读取到
 echo -e "${INFO} 设置构建环境变量..."
 export BOARD="microslam"
 export BRANCH="${BRANCH}"
@@ -164,9 +209,49 @@ export NEEDS_BINFMT="yes"  # 确保 binfmt 在 prepare_host 中安装
 # 默认的 1.0.0.1（Cloudflare DNS）在容器中无法直接访问
 export NAMESERVER="${NAMESERVER:-127.0.0.11}"
 
+# 7.1. 如果 BUILD_DESKTOP=yes，确保板级配置中的 DESKTOP_ENVIRONMENT 被读取
+# Armbian 的 prep_conf 会 source 板级配置文件，但如果 DESKTOP_ENVIRONMENT 在文件中已设置，
+# 需要确保它在 prep_conf 执行时能被正确读取
+# 注意：板级配置文件中的变量会在 source 时自动生效，但为了确保 aggregation 能正确识别，
+# 我们在这里显式读取板级配置文件中的 DESKTOP_ENVIRONMENT（如果存在）
+if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+    BOARD_CONFIG_FILE="${USERPATCHES_PATH}/config/boards/${BOARD}.conf"
+    if [[ -f "${BOARD_CONFIG_FILE}" ]]; then
+        # 临时 source 板级配置文件以读取 DESKTOP_ENVIRONMENT（如果已设置）
+        # 使用 subshell 避免污染当前环境
+        DESKTOP_ENV_FROM_CONFIG=$(grep -E "^DESKTOP_ENVIRONMENT=" "${BOARD_CONFIG_FILE}" | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "")
+        if [[ -n "${DESKTOP_ENV_FROM_CONFIG}" ]]; then
+            export DESKTOP_ENVIRONMENT="${DESKTOP_ENV_FROM_CONFIG}"
+            echo -e "${INFO} 从板级配置读取 DESKTOP_ENVIRONMENT: ${DESKTOP_ENVIRONMENT}"
+        fi
+        # 同样读取 DESKTOP_ENVIRONMENT_CONFIG_NAME
+        DESKTOP_CONFIG_NAME_FROM_CONFIG=$(grep -E "^DESKTOP_ENVIRONMENT_CONFIG_NAME=" "${BOARD_CONFIG_FILE}" | head -1 | cut -d'=' -f2 | tr -d '"' | tr -d "'" || echo "")
+        if [[ -n "${DESKTOP_CONFIG_NAME_FROM_CONFIG}" ]]; then
+            export DESKTOP_ENVIRONMENT_CONFIG_NAME="${DESKTOP_CONFIG_NAME_FROM_CONFIG}"
+            echo -e "${INFO} 从板级配置读取 DESKTOP_ENVIRONMENT_CONFIG_NAME: ${DESKTOP_ENVIRONMENT_CONFIG_NAME}"
+        fi
+    fi
+fi
+
 # 8. 执行配置准备（最小配置，只配置 rootfs，不配置 uboot/kernel）
+# prep_conf_main_only_rootfs_ni 会 source 板级配置文件，此时 DESKTOP_ENVIRONMENT 应该已经被设置
 echo -e "${INFO} 执行配置准备（跳过 uboot/kernel 配置）..."
 prep_conf_main_only_rootfs_ni < /dev/null
+
+# 8.1. 验证 DESKTOP_ENVIRONMENT 是否已正确设置（调试用）
+if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
+    if [[ -n "${DESKTOP_ENVIRONMENT:-}" ]]; then
+        echo -e "${SUCCESS} DESKTOP_ENVIRONMENT 已设置: ${DESKTOP_ENVIRONMENT}"
+        if [[ -n "${DESKTOP_ENVIRONMENT_CONFIG_NAME:-}" ]]; then
+            echo -e "${SUCCESS} DESKTOP_ENVIRONMENT_CONFIG_NAME 已设置: ${DESKTOP_ENVIRONMENT_CONFIG_NAME}"
+        else
+            echo -e "${WARNING} DESKTOP_ENVIRONMENT_CONFIG_NAME 未设置"
+        fi
+    else
+        echo -e "${ERROR} BUILD_DESKTOP=yes 但 DESKTOP_ENVIRONMENT 仍未设置，请检查板级配置文件"
+        exit 1
+    fi
+fi
 
 # 9. 准备构建环境（准备主机、聚合包列表等）
 # main_default_start_build 会自动运行 aggregation（如果被标记）
@@ -374,6 +459,11 @@ echo -e "${INFO} 安装发行版无关包（跳过 uboot/kernel）..."
 LOG_SECTION="install_distribution_agnostic" do_with_logging install_distribution_agnostic
 
 # 18. 自定义镜像（应用 MicroSLAM 自定义配置）
+# 确保 chroot 内能访问 /MicroSLAM-SDK/configs，避免自定义脚本找不到配置
+echo -e "${INFO} 准备 MicroSLAM 配置到 chroot..."
+run_host_command_logged mkdir -p "${SDCARD}/MicroSLAM-SDK"
+run_host_command_logged cp -a "${PROJECT_ROOT}/configs" "${SDCARD}/MicroSLAM-SDK/"
+
 echo -e "${INFO} 自定义镜像..."
 LOG_SECTION="customize_image" do_with_logging customize_image
 

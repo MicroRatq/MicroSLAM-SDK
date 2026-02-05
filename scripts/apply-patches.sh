@@ -32,7 +32,30 @@ SUCCESS="[\033[92m SUCCESS \033[0m]"
 ERROR="[\033[91m ERROR \033[0m]"
 WARNING="[\033[93m WARNING \033[0m]"
 
+# 是否在板级配置中启用 GNOME 桌面支持（需配合 build.sh --desktop 构建桌面镜像）
+# 可由 --desktop 参数指定，或由 build-rootfs.sh 传入的 BUILD_DESKTOP=yes 自动同步
+APPLY_DESKTOP="${APPLY_DESKTOP:-no}"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --desktop)
+            APPLY_DESKTOP="yes"
+            shift
+            ;;
+        *)
+            echo -e "${WARNING} 未知参数: $1"
+            shift
+            ;;
+    esac
+done
+# 若由 build-rootfs.sh 调用且已传 BUILD_DESKTOP=yes，则同步启用桌面配置
+if [[ "${APPLY_DESKTOP}" != "yes" ]] && [[ "${BUILD_DESKTOP:-no}" == "yes" ]]; then
+    APPLY_DESKTOP="yes"
+fi
+
 echo -e "${STEPS} 开始应用 MicroSLAM 补丁和配置..."
+if [[ "${APPLY_DESKTOP}" == "yes" ]]; then
+    echo -e "${INFO} 已启用 GNOME 桌面支持（板级配置将包含 DESKTOP_ENVIRONMENT）"
+fi
 
 # ============================================================================
 # 第一部分：集成设备树文件到内核源码树
@@ -188,7 +211,8 @@ BOOTBRANCH='branch:main'
 BOOTDIR="u-boot"
 
 # Package configuration
-PACKAGE_LIST_BOARD=""
+# firmware-iwlwifi: Intel WiFi (incl. AX210 ty-a0-gf-a0) ucode for iwlwifi
+PACKAGE_LIST_BOARD="firmware-iwlwifi"
 
 # Image configuration
 IMAGE_PARTITION_TABLE="gpt"
@@ -209,6 +233,22 @@ declare -g -a KERNEL_DRIVERS_SKIP=(
 # Enable MicroSLAM extensions
 declare -g EXTRA_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix"
 EOF
+
+# 若指定 --desktop，追加 GNOME 桌面相关变量，供 build-rootfs.sh 在 BUILD_DESKTOP=yes 时使用
+if [[ "${APPLY_DESKTOP}" == "yes" ]]; then
+    cat >> "${BOARD_CONFIG}" << 'DESKTOPEOF'
+
+# GNOME desktop support (when BUILD_DESKTOP=yes and build.sh --desktop)
+# Armbian 据此安装 armbian-desktop / armbian-bsp-desktop 及 GNOME 相关包
+DESKTOP_ENVIRONMENT="gnome"
+DESKTOP_ENVIRONMENT_CONFIG_NAME="config_base"
+DESKTOP_APPGROUPS_INSTALL="browser desktop"
+DESKTOP_AUTOLOGIN="yes"
+DESKTOP_ENVIRONMENT_PACKAGE_LIST="gnome"
+DESKTOPEOF
+    echo -e "${SUCCESS} 已向板卡配置追加 GNOME 桌面支持: ${BOARD_CONFIG}"
+fi
+
 echo -e "${SUCCESS} 已生成板卡配置文件: ${BOARD_CONFIG}"
 
 # 3.2 从 configs/kernel/config-6.1 生成内核配置文件
@@ -322,6 +362,135 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
         chmod 644 /etc/balance_irq
         echo -e "${INFO} 已复制 /etc/balance_irq"
     fi
+    
+    # 复制 iwlwifi 模块配置（禁用节电等，避免 -110 超时）
+    if [ -f "${MICROSLAM_CONFIGS}/rootfs/etc/modprobe.d/iwlwifi.conf" ]; then
+        mkdir -p /etc/modprobe.d
+        cp -f "${MICROSLAM_CONFIGS}/rootfs/etc/modprobe.d/iwlwifi.conf" /etc/modprobe.d/iwlwifi.conf
+        chmod 644 /etc/modprobe.d/iwlwifi.conf
+        echo -e "${INFO} 已复制 /etc/modprobe.d/iwlwifi.conf"
+    fi
+    
+    # 复制 NetworkManager 配置（将 wlan0 作为首选无线网卡，屏蔽 p2p0）
+    if [ -f "${MICROSLAM_CONFIGS}/rootfs/etc/NetworkManager/NetworkManager.conf" ]; then
+        mkdir -p /etc/NetworkManager
+        cp -f "${MICROSLAM_CONFIGS}/rootfs/etc/NetworkManager/NetworkManager.conf" /etc/NetworkManager/NetworkManager.conf
+        chmod 644 /etc/NetworkManager/NetworkManager.conf
+        echo -e "${INFO} 已复制 /etc/NetworkManager/NetworkManager.conf"
+    fi
+    
+    # 复制 gdm3 配置（强制使用 X11，避免 Wayland 在 RK3588 上的 DRM 问题）
+    if [ -f "${MICROSLAM_CONFIGS}/rootfs/etc/gdm3/custom.conf" ]; then
+        mkdir -p /etc/gdm3
+        cp -f "${MICROSLAM_CONFIGS}/rootfs/etc/gdm3/custom.conf" /etc/gdm3/custom.conf
+        chmod 644 /etc/gdm3/custom.conf
+        echo -e "${INFO} 已复制 /etc/gdm3/custom.conf（强制 X11）"
+    fi
+
+    # 应用用户配置（users.yaml）
+    USERS_CONFIG="${MICROSLAM_CONFIGS}/rootfs/users.yaml"
+    if [ -f "${USERS_CONFIG}" ]; then
+        echo -e "${INFO} 应用用户配置: ${USERS_CONFIG}"
+
+        while IFS=$'\t' read -r username password; do
+            # 跳过空行或解析失败的条目
+            if [ -z "${username}" ]; then
+                continue
+            fi
+
+            # 如果密码为空，跳过该用户
+            if [ -z "${password}" ]; then
+                echo -e "${INFO} 用户 ${username} 密码为空，跳过"
+                continue
+            fi
+
+            if [ "${username}" = "root" ]; then
+                echo "root:${password}" | chpasswd
+                echo -e "${INFO} 已设置 root 密码"
+            else
+                if ! id -u "${username}" >/dev/null 2>&1; then
+                    # 确保 /home 存在，否则 useradd -m 可能不会创建目录
+                    mkdir -p /home
+                    useradd -m -s /bin/bash "${username}"
+                    echo -e "${INFO} 已创建用户 ${username}"
+                fi
+
+                # 若 home 目录未创建，手动补齐并修正属主
+                if [ ! -d "/home/${username}" ]; then
+                    mkdir -p "/home/${username}"
+                    chown "${username}:${username}" "/home/${username}"
+                    chmod 755 "/home/${username}"
+                    echo -e "${INFO} 已创建 /home/${username}"
+                fi
+
+                echo "${username}:${password}" | chpasswd
+                if usermod -aG video,render,input,tty "${username}"; then
+                    echo -e "${INFO} 已将 ${username} 加入 video/render/input/tty 组"
+                else
+                    echo -e "${INFO} 无法将 ${username} 加入 video/render/input/tty 组（可能不存在该组）"
+                fi
+                echo -e "${INFO} 已设置 ${username} 密码"
+            fi
+        done < <(
+            awk '
+                BEGIN { in_users = 0; user = "" }
+                {
+                    line = $0
+                    sub(/#.*/, "", line)
+                    if (line ~ /^[ \t]*$/) next
+                    if (line ~ /^users:[ \t]*$/) { in_users = 1; next }
+                    if (!in_users) next
+                    if (line ~ /^[ \t]{2}[^:]+:[ \t]*$/) {
+                        sub(/^[ \t]{2}/, "", line)
+                        sub(/:[ \t]*$/, "", line)
+                        user = line
+                        next
+                    }
+                    if (line ~ /^[ \t]{4}password:[ \t]*/ && user != "") {
+                        sub(/^[ \t]{4}password:[ \t]*/, "", line)
+                        gsub(/^[ \t]+|[ \t]+$/, "", line)
+                        gsub(/^["\047]|["\047]$/, "", line)
+                        print user "\t" line
+                    }
+                }
+            ' "${USERS_CONFIG}"
+        )
+    else
+        echo -e "${INFO} 未找到 users.yaml，跳过用户配置"
+    fi
+fi
+
+# 桌面环境配置：gdm3 为 static 服务，确保 graphical.target 与 display-manager.service 正确关联
+GDM_UNIT=""
+if [ -f /usr/lib/systemd/system/gdm.service ]; then
+    GDM_UNIT="/usr/lib/systemd/system/gdm.service"
+elif [ -f /lib/systemd/system/gdm.service ]; then
+    GDM_UNIT="/lib/systemd/system/gdm.service"
+elif [ -f /usr/lib/systemd/system/gdm3.service ]; then
+    GDM_UNIT="/usr/lib/systemd/system/gdm3.service"
+elif [ -f /lib/systemd/system/gdm3.service ]; then
+    GDM_UNIT="/lib/systemd/system/gdm3.service"
+fi
+
+if [ -n "${GDM_UNIT}" ]; then
+    echo -e "${INFO} 检测到 GDM 单元：${GDM_UNIT}"
+
+    # 设置默认启动 target 为 graphical.target
+    rm -f /etc/systemd/system/default.target
+    if [ -f /usr/lib/systemd/system/graphical.target ]; then
+        ln -sf /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target
+    elif [ -f /lib/systemd/system/graphical.target ]; then
+        ln -sf /lib/systemd/system/graphical.target /etc/systemd/system/default.target
+    fi
+    echo -e "${INFO} 已设置默认启动 target 为 graphical.target"
+
+    # 创建 display-manager.service 指向 gdm.service，确保 graphical.target 能拉起显示管理器
+    mkdir -p /etc/systemd/system
+    rm -f /etc/systemd/system/display-manager.service
+    ln -sf "${GDM_UNIT}" /etc/systemd/system/display-manager.service
+    echo -e "${INFO} 已创建 display-manager.service -> ${GDM_UNIT}"
+else
+    echo -e "${INFO} 未检测到 GDM 单元，保持默认 CLI 模式"
 fi
 
 echo -e "${SUCCESS} MicroSLAM镜像自定义完成"
