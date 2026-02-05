@@ -1056,6 +1056,16 @@
 // };
 
 &gmac1 {
+	dma-coherent;
+	/* RK3588 dtsi only has 5 clocks; dwmac-rk expects optional mac_clk_rx/tx, clk_mac_speed - add as aliases to avoid "cannot get clock" and ensure MAC clocks */
+	clocks = <&cru CLK_GMAC_125M>, <&cru CLK_GMAC_50M>,
+		 <&cru PCLK_GMAC1>, <&cru ACLK_GMAC1>,
+		 <&cru CLK_GMAC1_PTP_REF>,
+		 <&cru CLK_GMAC_50M>, <&cru CLK_GMAC_50M>, <&cru CLK_GMAC_125M>;
+	clock-names = "stmmaceth", "clk_mac_ref",
+		      "pclk_mac", "aclk_mac",
+		      "ptp_ref",
+		      "mac_clk_rx", "mac_clk_tx", "clk_mac_speed";
 	/* Use rgmii-rxid mode to disable rx delay inside Soc */
 	phy-mode = "rgmii-id";
 	clock_in_out = "input";
