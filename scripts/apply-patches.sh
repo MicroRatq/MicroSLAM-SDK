@@ -210,9 +210,8 @@ BOOTSOURCE='https://github.com/ophub/u-boot'
 BOOTBRANCH='branch:main'
 BOOTDIR="u-boot"
 
-# Package configuration
-# firmware-iwlwifi: Intel WiFi (incl. AX210 ty-a0-gf-a0) ucode for iwlwifi
-PACKAGE_LIST_BOARD="firmware-iwlwifi"
+# Package configuration（Intel Wi-Fi ucode 改由 customize-image 阶段 apt 安装 linux-firmware）
+PACKAGE_LIST_BOARD=""
 
 # Image configuration
 IMAGE_PARTITION_TABLE="gpt"
@@ -458,6 +457,41 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
     else
         echo -e "${INFO} 未找到 users.yaml，跳过用户配置"
     fi
+fi
+
+# 仅安装 iwlwifi-ty-a0-gf-a0（Intel AX210）固件为 .ucode，避免整包 linux-firmware 导致 rootfs 增大约 600MB 且多为 .zst
+if command -v apt-get >/dev/null 2>&1 && command -v dpkg >/dev/null 2>&1; then
+    echo -e "${INFO} 安装 iwlwifi-ty-a0-gf-a0 固件（.ucode）..."
+    _fw_tmp="/tmp/microslam-fw"
+    _deb_tmp="/tmp/microslam-fw-deb"
+    mkdir -p "${_fw_tmp}" "${_deb_tmp}"
+    _fw_src=""
+    if apt-get update -qq 2>/dev/null; then
+        (cd "${_deb_tmp}" && apt-get download -q linux-firmware 2>/dev/null)
+        _deb="$(ls -1 "${_deb_tmp}"/linux-firmware_*.deb 2>/dev/null | head -1)"
+        if [ -n "${_deb}" ] && [ -f "${_deb}" ]; then
+            dpkg -x "${_deb}" "${_fw_tmp}"
+            [ -d "${_fw_tmp}/lib/firmware" ] && _fw_src="${_fw_tmp}/lib/firmware"
+            [ -z "${_fw_src}" ] && [ -d "${_fw_tmp}/usr/lib/firmware" ] && _fw_src="${_fw_tmp}/usr/lib/firmware"
+        fi
+    fi
+    if [ -n "${_fw_src}" ]; then
+        mkdir -p /lib/firmware
+        for _f in "${_fw_src}"/iwlwifi-ty-a0-gf-a0*; do
+            [ -e "${_f}" ] || continue
+            _base="$(basename "${_f}")"
+            if [ "${_base%.zst}" != "${_base}" ]; then
+                _out="${_base%.zst}"
+                if command -v zstd >/dev/null 2>&1; then
+                    zstd -d -q -f -o "/lib/firmware/${_out}" "${_f}" 2>/dev/null || true
+                fi
+            else
+                cp -f "${_f}" "/lib/firmware/${_base}" 2>/dev/null || true
+            fi
+        done
+        echo -e "${INFO} 已安装 iwlwifi-ty-a0-gf-a0（仅 .ucode/.pnvm，无整包冗余）"
+    fi
+    rm -rf "${_fw_tmp}" "${_deb_tmp}"
 fi
 
 # 桌面环境配置：gdm3 为 static 服务，确保 graphical.target 与 display-manager.service 正确关联
