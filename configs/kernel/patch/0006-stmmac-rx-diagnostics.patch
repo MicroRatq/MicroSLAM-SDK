@@ -1,0 +1,338 @@
+diff --git a/drivers/net/ethernet/stmicro/stmmac/dwmac4_lib.c b/drivers/net/ethernet/stmicro/stmmac/dwmac4_lib.c
+old mode 100644
+new mode 100755
+index 3b9e4db37..5fcf95ff3
+--- a/drivers/net/ethernet/stmicro/stmmac/dwmac4_lib.c
++++ b/drivers/net/ethernet/stmicro/stmmac/dwmac4_lib.c
+@@ -8,10 +8,17 @@
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
+ #include <linux/delay.h>
++#include <linux/kernel.h>
++#include <linux/moduleparam.h>
+ #include "common.h"
+ #include "dwmac4_dma.h"
+ #include "dwmac4.h"
+ 
++/* 低层 DMA/IRQ 诊断：打印每通道 status/enable 及屏蔽关系（限速） */
++static bool dwmac4_rxdiag = true;
++module_param(dwmac4_rxdiag, bool, 0644);
++MODULE_PARM_DESC(dwmac4_rxdiag, "Enable dwmac4 DMA irq diagnostics (default: Y)");
++
+ int dwmac4_dma_reset(void __iomem *ioaddr)
+ {
+ 	u32 value = readl(ioaddr + DMA_BUS_MODE);
+@@ -89,6 +96,7 @@ void dwmac4_set_rx_ring_len(void __iomem *ioaddr, u32 len, u32 chan)
+ void dwmac4_enable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+ {
+ 	u32 value = readl(ioaddr + DMA_CHAN_INTR_ENA(chan));
++	u32 old = value;
+ 
+ 	if (rx)
+ 		value |= DMA_CHAN_INTR_DEFAULT_RX;
+@@ -96,6 +104,13 @@ void dwmac4_enable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+ 		value |= DMA_CHAN_INTR_DEFAULT_TX;
+ 
+ 	writel(value, ioaddr + DMA_CHAN_INTR_ENA(chan));
++
++	if (unlikely(dwmac4_rxdiag && net_ratelimit())) {
++		u32 rb = readl(ioaddr + DMA_CHAN_INTR_ENA(chan));
++
++		pr_info("dwmac4_rxdiag:ena chan=%u rx=%d tx=%d intr_ena %08x->%08x (rb=%08x)\n",
++			chan, rx, tx, old, value, rb);
++	}
+ }
+ 
+ void dwmac410_enable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+@@ -113,6 +128,7 @@ void dwmac410_enable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+ void dwmac4_disable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+ {
+ 	u32 value = readl(ioaddr + DMA_CHAN_INTR_ENA(chan));
++	u32 old = value;
+ 
+ 	if (rx)
+ 		value &= ~DMA_CHAN_INTR_DEFAULT_RX;
+@@ -120,6 +136,13 @@ void dwmac4_disable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+ 		value &= ~DMA_CHAN_INTR_DEFAULT_TX;
+ 
+ 	writel(value, ioaddr + DMA_CHAN_INTR_ENA(chan));
++
++	if (unlikely(dwmac4_rxdiag && net_ratelimit())) {
++		u32 rb = readl(ioaddr + DMA_CHAN_INTR_ENA(chan));
++
++		pr_info("dwmac4_rxdiag:dis chan=%u rx=%d tx=%d intr_ena %08x->%08x (rb=%08x)\n",
++			chan, rx, tx, old, value, rb);
++	}
+ }
+ 
+ void dwmac410_disable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+@@ -137,8 +160,9 @@ void dwmac410_disable_dma_irq(void __iomem *ioaddr, u32 chan, bool rx, bool tx)
+ int dwmac4_dma_interrupt(void __iomem *ioaddr,
+ 			 struct stmmac_extra_stats *x, u32 chan, u32 dir)
+ {
+-	u32 intr_status = readl(ioaddr + DMA_CHAN_STATUS(chan));
++	u32 raw_status = readl(ioaddr + DMA_CHAN_STATUS(chan));
+ 	u32 intr_en = readl(ioaddr + DMA_CHAN_INTR_ENA(chan));
++	u32 intr_status = raw_status;
+ 	int ret = 0;
+ 
+ 	if (dir == DMA_DIR_RX)
+@@ -146,6 +170,18 @@ int dwmac4_dma_interrupt(void __iomem *ioaddr,
+ 	else if (dir == DMA_DIR_TX)
+ 		intr_status &= DMA_CHAN_STATUS_MSK_TX;
+ 
++	if (unlikely(dwmac4_rxdiag && net_ratelimit())) {
++		u32 ack = intr_status & intr_en;
++
++		/* 重点看 RI/TI 是否发生，以及是否被 intr_en 屏蔽 */
++		pr_info("dwmac4_rxdiag:irq chan=%u dir=%u raw=%08x masked=%08x en=%08x ack=%08x RI=%d/%d TI=%d/%d\n",
++			chan, dir, raw_status, intr_status, intr_en, ack,
++			!!(intr_status & DMA_CHAN_STATUS_RI),
++			!!(intr_en & DMA_CHAN_INTR_ENA_RIE),
++			!!(intr_status & DMA_CHAN_STATUS_TI),
++			!!(intr_en & DMA_CHAN_INTR_ENA_TIE));
++	}
++
+ 	/* ABNORMAL interrupts */
+ 	if (unlikely(intr_status & DMA_CHAN_STATUS_AIS)) {
+ 		if (unlikely(intr_status & DMA_CHAN_STATUS_RBU))
+diff --git a/drivers/net/ethernet/stmicro/stmmac/stmmac.h b/drivers/net/ethernet/stmicro/stmmac/stmmac.h
+old mode 100644
+new mode 100755
+index 00bb41886..1110bae9f
+--- a/drivers/net/ethernet/stmicro/stmmac/stmmac.h
++++ b/drivers/net/ethernet/stmicro/stmmac/stmmac.h
+@@ -297,6 +297,7 @@ struct stmmac_priv {
+ 	unsigned long state;
+ 	struct workqueue_struct *wq;
+ 	struct work_struct service_task;
++	struct delayed_work rxdiag_dwork;	/* PHY 计数等仅在进程上下文执行 */
+ 
+ 	/* Workqueue for handling FPE hand-shaking */
+ 	unsigned long fpe_task_state;
+diff --git a/drivers/net/ethernet/stmicro/stmmac/stmmac_main.c b/drivers/net/ethernet/stmicro/stmmac/stmmac_main.c
+old mode 100644
+new mode 100755
+index 30ca7584c..e8e11e89b
+--- a/drivers/net/ethernet/stmicro/stmmac/stmmac_main.c
++++ b/drivers/net/ethernet/stmicro/stmmac/stmmac_main.c
+@@ -37,6 +37,7 @@
+ #endif /* CONFIG_DEBUG_FS */
+ #include <linux/net_tstamp.h>
+ #include <linux/phylink.h>
++#include <linux/phy.h>
+ #include <linux/udp.h>
+ #include <linux/bpf_trace.h>
+ #include <net/pkt_cls.h>
+@@ -70,6 +71,17 @@ static int debug = -1;
+ module_param(debug, int, 0644);
+ MODULE_PARM_DESC(debug, "Message Level (-1: default, 0: no output, 16: all)");
+ 
++/*
++ * RX 诊断开关（用于排查“能发包但收不到入方向帧/无法 DHCP”的问题）。
++ * 开启后会在 IRQ/NAPI/RX 描述符关键路径打印限速日志，帮助判断：
++ * - 是否有 RX 相关中断
++ * - 是否调度到 RX NAPI
++ * - RX 描述符是否一直处于 dma_own（DMA 未回收/未写入新包）
++ */
++static bool rxdiag = true;
++module_param(rxdiag, bool, 0644);
++MODULE_PARM_DESC(rxdiag, "Enable verbose RX diagnostics (default: Y)");
++
+ static int phyaddr = -1;
+ module_param(phyaddr, int, 0444);
+ MODULE_PARM_DESC(phyaddr, "Physical device address");
+@@ -137,6 +149,7 @@ static void stmmac_tx_timer_arm(struct stmmac_priv *priv, u32 queue);
+ static void stmmac_flush_tx_descriptors(struct stmmac_priv *priv, int queue);
+ static void stmmac_set_dma_operation_mode(struct stmmac_priv *priv, u32 txmode,
+ 					  u32 rxmode, u32 chan);
++static void stmmac_rxdiag_dwork_fn(struct work_struct *work);
+ 
+ #ifdef CONFIG_DEBUG_FS
+ static const struct net_device_ops stmmac_netdev_ops;
+@@ -374,6 +387,76 @@ static void print_pkt(unsigned char *buf, int len)
+ 	print_hex_dump_bytes("", DUMP_PREFIX_OFFSET, buf, len);
+ }
+ 
++static void stmmac_rxdiag_log_desc(struct stmmac_priv *priv, u32 queue,
++				  struct stmmac_rx_queue *rx_q,
++				  struct dma_desc *p, int status,
++				  const char *tag)
++{
++	__le32 *d;
++
++	if (!rxdiag)
++		return;
++
++	/* 避免刷屏：只在 net_ratelimit() 允许时打印 */
++	if (!net_ratelimit())
++		return;
++
++	d = (__le32 *)p;
++
++	netdev_info(priv->dev,
++		    "rxdiag:%s q%u cur=%u dirty=%u tail=%#x status=%#x desc=%08x %08x %08x %08x\n",
++		    tag, queue, rx_q->cur_rx, rx_q->dirty_rx, rx_q->rx_tail_addr,
++		    status,
++		    le32_to_cpu(d[0]), le32_to_cpu(d[1]),
++		    le32_to_cpu(d[2]), le32_to_cpu(d[3]));
++}
++
++static void stmmac_rxdiag_phy_counters(struct stmmac_priv *priv)
++{
++	struct phy_device *phydev;
++	int addr;
++	int bmcr, bmsr;
++	int rerr, lberr;
++
++	if (!rxdiag || !priv->mii)
++		return;
++	addr = priv->plat->phy_addr;
++	if (addr >= 0) {
++		phydev = mdiobus_get_phy(priv->mii, addr);
++		if (!phydev) {
++			netdev_info(priv->dev, "rxdiag:phy not found addr=%d\n", addr);
++			return;
++		}
++	} else {
++		phydev = phy_find_first(priv->mii);
++		if (!phydev) {
++			netdev_info(priv->dev, "rxdiag:phy addr unknown (no PHY on bus)\n");
++			return;
++		}
++		addr = phydev->mdio.addr;
++	}
++
++	bmcr = phy_read(phydev, MII_BMCR);
++	bmsr = phy_read(phydev, MII_BMSR);
++	rerr = phy_read(phydev, MII_RERRCOUNTER);
++	lberr = phy_read(phydev, MII_LBRERROR);
++
++	netdev_info(priv->dev,
++		    "rxdiag:phy addr=%d id=%08x bmcr=%#x bmsr=%#x rerr=%d lberr=%d\n",
++		    addr, phydev->phy_id, bmcr, bmsr, rerr, lberr);
++}
++
++/* 仅在进程上下文执行，避免 IRQ 中 phy_read -> usleep -> scheduling while atomic */
++static void stmmac_rxdiag_dwork_fn(struct work_struct *work)
++{
++	struct delayed_work *dwork = to_delayed_work(work);
++	struct stmmac_priv *priv = container_of(dwork, struct stmmac_priv, rxdiag_dwork);
++
++	stmmac_rxdiag_phy_counters(priv);
++	if (netif_running(priv->dev))
++		schedule_delayed_work(&priv->rxdiag_dwork, HZ * 2);
++}
++
+ static inline u32 stmmac_tx_avail(struct stmmac_priv *priv, u32 queue)
+ {
+ 	struct stmmac_tx_queue *tx_q = &priv->dma_conf.tx_queue[queue];
+@@ -2809,6 +2892,15 @@ static int stmmac_napi_check(struct stmmac_priv *priv, u32 chan, u32 dir)
+ 	rx_napi = rx_q->xsk_pool ? &ch->rxtx_napi : &ch->rx_napi;
+ 	tx_napi = tx_q->xsk_pool ? &ch->rxtx_napi : &ch->tx_napi;
+ 
++	if (unlikely(rxdiag && status && net_ratelimit())) {
++		netdev_info(priv->dev,
++			    "rxdiag:napi_check chan=%u dir=%u status=%#x (handle_rx=%u handle_tx=%u) cur_rx=%u dirty_rx=%u cur_tx=%u dirty_tx=%u\n",
++			    chan, dir, status,
++			    !!(status & handle_rx), !!(status & handle_tx),
++			    rx_q->cur_rx, rx_q->dirty_rx,
++			    tx_q->cur_tx, tx_q->dirty_tx);
++	}
++
+ 	if ((status & handle_rx) && (chan < priv->plat->rx_queues_to_use)) {
+ 		if (napi_schedule_prep(rx_napi)) {
+ 			spin_lock_irqsave(&ch->lock, flags);
+@@ -2854,6 +2946,16 @@ static void stmmac_dma_interrupt(struct stmmac_priv *priv)
+ 		status[chan] = stmmac_napi_check(priv, chan,
+ 						 DMA_DIR_RXTX);
+ 
++	/* rxdiag: 仅打印 DMA IRQ 状态，不在 IRQ 中排队/调用任何会睡眠的代码（如 PHY 读） */
++	if (unlikely(rxdiag && net_ratelimit())) {
++		for (chan = 0; chan < channels_to_check; chan++) {
++			if (status[chan])
++				netdev_info(priv->dev,
++					    "rxdiag:dma_irq chan=%u status=%#x\n",
++					    chan, status[chan]);
++		}
++	}
++
+ 	for (chan = 0; chan < tx_channel_count; chan++) {
+ 		if (unlikely(status[chan] & tx_hard_error_bump_tc)) {
+ 			/* Try to bump up the dma threshold on this failure */
+@@ -3901,6 +4003,20 @@ static int __stmmac_open(struct net_device *dev,
+ 	if (ret)
+ 		goto irq_error;
+ 
++	if (unlikely(rxdiag)) {
++		netdev_info(priv->dev,
++			    "rxdiag:open rxq=%u txq=%u multi_msi=%d dev_irq=%d rx_irq0=%d tx_irq0=%d use_riwt=%d rx_coal_frames0=%u\n",
++			    priv->plat->rx_queues_to_use,
++			    priv->plat->tx_queues_to_use,
++			    priv->plat->multi_msi_en,
++			    dev->irq,
++			    priv->rx_irq[0],
++			    priv->tx_irq[0],
++			    priv->use_riwt,
++			    priv->rx_coal_frames[0]);
++		schedule_delayed_work(&priv->rxdiag_dwork, HZ * 2);
++	}
++
+ 	stmmac_enable_all_queues(priv);
+ 	netif_tx_start_all_queues(priv->dev);
+ 	stmmac_enable_all_dma_irq(priv);
+@@ -3978,6 +4094,8 @@ static int stmmac_release(struct net_device *dev)
+ 
+ 	netif_tx_disable(dev);
+ 
++	cancel_delayed_work_sync(&priv->rxdiag_dwork);
++
+ 	/* Free the IRQ lines */
+ 	stmmac_free_irq(dev, REQ_IRQ_ERR_ALL, 0);
+ 
+@@ -5314,8 +5432,13 @@ static int stmmac_rx(struct stmmac_priv *priv, int limit, u32 queue)
+ 		status = stmmac_rx_status(priv, &priv->dev->stats,
+ 				&priv->xstats, p);
+ 		/* check if managed by the DMA otherwise go ahead */
+-		if (unlikely(status & dma_own))
++		if (unlikely(status & dma_own)) {
++			/* 无任何包进入时，经常停在这里：记录当前描述符原始内容 */
++			if (!count)
++				stmmac_rxdiag_log_desc(priv, queue, rx_q, p,
++						       status, "dma_own");
+ 			break;
++		}
+ 
+ 		rx_q->cur_rx = STMMAC_GET_ENTRY(rx_q->cur_rx,
+ 						priv->dma_conf.dma_rx_size);
+@@ -5521,6 +5644,14 @@ static int stmmac_napi_poll_rx(struct napi_struct *napi, int budget)
+ 	priv->xstats.napi_poll++;
+ 
+ 	work_done = stmmac_rx(priv, budget, chan);
++	if (unlikely(rxdiag && !work_done && net_ratelimit())) {
++		struct stmmac_rx_queue *rx_q = &priv->dma_conf.rx_queue[chan];
++
++		netdev_info(priv->dev,
++			    "rxdiag:napi_poll_rx chan=%u budget=%d done=%d cur_rx=%u dirty_rx=%u tail=%#x\n",
++			    chan, budget, work_done,
++			    rx_q->cur_rx, rx_q->dirty_rx, rx_q->rx_tail_addr);
++	}
+ 	if (work_done < budget && napi_complete_done(napi, work_done)) {
+ 		unsigned long flags;
+ 
+@@ -7324,6 +7455,7 @@ int stmmac_dvr_probe(struct device *device,
+ 	}
+ 
+ 	INIT_WORK(&priv->service_task, stmmac_service_task);
++	INIT_DELAYED_WORK(&priv->rxdiag_dwork, stmmac_rxdiag_dwork_fn);
+ 
+ 	/* Initialize Link Partner FPE workqueue */
+ 	INIT_WORK(&priv->fpe_task, stmmac_fpe_lp_task);
+@@ -7612,6 +7744,7 @@ int stmmac_dvr_remove(struct device *dev)
+ 	if (priv->hw->pcs != STMMAC_PCS_TBI &&
+ 	    priv->hw->pcs != STMMAC_PCS_RTBI)
+ 		stmmac_mdio_unregister(ndev);
++	cancel_delayed_work_sync(&priv->rxdiag_dwork);
+ 	destroy_workqueue(priv->wq);
+ 	mutex_destroy(&priv->lock);
+ 	bitmap_free(priv->af_xdp_zc_qps);

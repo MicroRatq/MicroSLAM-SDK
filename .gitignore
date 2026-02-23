@@ -26,6 +26,7 @@ __pycache__/
 # 编辑器配置
 .vscode/
 .idea/
+.cursorignore
 
 # 系统文件
 Thumbs.db
