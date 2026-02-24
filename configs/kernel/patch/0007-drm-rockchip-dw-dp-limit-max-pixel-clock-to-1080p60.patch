@@ -1,0 +1,18 @@
+--- a/drivers/gpu/drm/rockchip/dw-dp.c
++++ b/drivers/gpu/drm/rockchip/dw-dp.c
+@@ -3314,6 +3314,15 @@
+ 	struct drm_device *dev = encoder->dev;
+ 	struct rockchip_crtc_state *s;
+ 
++	/*
++	 * Limit maximum pixel clock to 1920x1080@60Hz (~148500 kHz) to stay
++	 * within reliable RK3588 display pipeline bandwidth. Modes exceeding
++	 * this threshold are rejected at the KMS level so the kernel never
++	 * advertises them to userspace (GNOME/X11), regardless of EDID.
++	 */
++	if (mode->clock > 148500)
++		return MODE_CLOCK_HIGH;
++
+ 	if (crtc) {
+ 		s = to_rockchip_crtc_state(crtc->state);
+ 		s->output_type = DRM_MODE_CONNECTOR_DisplayPort;
