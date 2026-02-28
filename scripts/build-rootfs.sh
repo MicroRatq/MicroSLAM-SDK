@@ -470,6 +470,10 @@ run_host_command_logged cp -a "${PROJECT_ROOT}/configs" "${SDCARD}/MicroSLAM-SDK
 echo -e "${INFO} 自定义镜像..."
 LOG_SECTION="customize_image" do_with_logging customize_image
 
+# 清理复制到此的临时配置和debs目录，防止被打包进rootfs影响后续挂载大小
+echo -e "${INFO} 清理 chroot 中的 MicroSLAM 临时配置..."
+run_host_command_logged rm -rf "${SDCARD}/MicroSLAM-SDK"
+
 # 19. 创建 sources.list 并部署 repo key
 echo -e "${INFO} 配置 APT 源..."
 create_sources_list_and_deploy_repo_key "image-late" "${RELEASE}" "${SDCARD}/"
@@ -509,17 +513,17 @@ echo -e "${INFO} 打包 rootfs 为 tar.zst..."
 declare yyyymm="$(date +%Y%m)"
 declare artifact_name="rootfs-${ARCH}-${RELEASE}-${cache_type}"
 declare artifact_version="${yyyymm}-${rootfs_cache_id}"
-declare -g artifact_final_file="${SRC}/cache/rootfs/${artifact_name}_${artifact_version}.tar.zst"
+# 不再覆盖 cache/rootfs 下的干净底包，而是直接保存成带有 microslam 前缀的内容至 OUTPUT_DIR
+declare -g artifact_final_file="${OUTPUT_DIR}/microslam-${artifact_name}_${artifact_version}.tar.zst"
 declare -g cache_fname="${artifact_final_file}"
-declare -g cache_name="${artifact_name}_${artifact_version}"
+declare -g cache_name="microslam-${artifact_name}_${artifact_version}"
 LOG_SECTION="create_rootfs_tarball" do_with_logging create_new_rootfs_cache_tarball
 
-# 25. 复制 rootfs 输出文件
-echo -e "${INFO} 复制 rootfs 输出文件..."
+# 25. 检查 rootfs 输出文件
+echo -e "${INFO} 检查 rootfs 输出文件..."
 if [[ -f "${artifact_final_file}" ]]; then
-    cp -f "${artifact_final_file}" "${OUTPUT_DIR}/"
     echo -e "${SUCCESS} RootFS 已创建: $(basename ${artifact_final_file})"
-    ls -lh "${OUTPUT_DIR}/$(basename ${artifact_final_file})"
+    ls -lh "${artifact_final_file}"
 else
     echo -e "${ERROR} RootFS 文件不存在: ${artifact_final_file}"
     echo -e "${ERROR} 请检查 rootfs 打包过程"
