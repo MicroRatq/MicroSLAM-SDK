@@ -84,6 +84,9 @@ RUN pip3 install --no-cache-dir \
     requests \
     || true
 
+# 配置 root 用户的全局 Git 安全目录（防止挂载宿主机卷时报 ownership错）
+RUN git config --global --add safe.directory '*'
+
 # 创建用户并设置密码
 ARG USER_ID=1000
 ARG GROUP_ID=1000

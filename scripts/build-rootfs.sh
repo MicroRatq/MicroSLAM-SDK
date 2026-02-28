@@ -234,7 +234,10 @@ if [[ "${BUILD_DESKTOP}" == "yes" ]]; then
 fi
 
 # 8. 执行配置准备（最小配置，只配置 rootfs，不配置 uboot/kernel）
-# prep_conf_main_only_rootfs_ni 会 source 板级配置文件，此时 DESKTOP_ENVIRONMENT 应该已经被设置
+# ENABLE_EXTENSIONS 必须在 prep_conf 之前 export，initialize_extension_manager 会读取此变量。
+# 不能用 use_board=yes（会 source microslam.conf 覆盖 BOOTCONFIG/KERNELSOURCE 导致 uboot artifact 被要求）。
+# 直接在这里显式设置 ENABLE_EXTENSIONS，extension manager 初始化时会自动加载。
+export ENABLE_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix"
 echo -e "${INFO} 执行配置准备（跳过 uboot/kernel 配置）..."
 prep_conf_main_only_rootfs_ni < /dev/null
 
