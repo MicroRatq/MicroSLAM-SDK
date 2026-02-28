@@ -229,8 +229,9 @@ declare -g -a KERNEL_DRIVERS_SKIP=(
     driver_rtw88              # rtw88 驱动已包含在 unifreq 仓库的上游版本中，patch 冲突
 )
 
-# Enable MicroSLAM extensions
-declare -g EXTRA_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix"
+# Enable MicroSLAM extensions（必须使用 ENABLE_EXTENSIONS，这是 Armbian extension manager 消费的变量名）
+# 注意：此配置文件被 Armbian source，不能用 declare -g，直接赋值即可
+ENABLE_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix"
 EOF
 
 # 若指定 --desktop，追加 GNOME 桌面相关变量，供 build-rootfs.sh 在 BUILD_DESKTOP=yes 时使用
@@ -386,10 +387,10 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
         echo -e "${INFO} 已复制 /etc/gdm3/custom.conf（强制 X11）"
     fi
 
-    # 应用用户配置（users.yaml）
-    USERS_CONFIG="${MICROSLAM_CONFIGS}/rootfs/users.yaml"
-    if [ -f "${USERS_CONFIG}" ]; then
-        echo -e "${INFO} 应用用户配置: ${USERS_CONFIG}"
+    # 应用用户配置（config-rootfs.yaml）
+    ROOTFS_CONFIG="${MICROSLAM_CONFIGS}/rootfs/config-rootfs.yaml"
+    if [ -f "${ROOTFS_CONFIG}" ]; then
+        echo -e "${INFO} 应用用户配置: ${ROOTFS_CONFIG}"
 
         while IFS=$'\t' read -r username password; do
             # 跳过空行或解析失败的条目
@@ -423,10 +424,10 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
                 fi
 
                 echo "${username}:${password}" | chpasswd
-                if usermod -aG video,render,input,tty "${username}"; then
-                    echo -e "${INFO} 已将 ${username} 加入 video/render/input/tty 组"
+                if usermod -aG sudo,video,render,input,tty "${username}"; then
+                    echo -e "${INFO} 已将 ${username} 加入 sudo/video/render/input/tty 组"
                 else
-                    echo -e "${INFO} 无法将 ${username} 加入 video/render/input/tty 组（可能不存在该组）"
+                    echo -e "${INFO} 无法将 ${username} 加入目标组（可能不存在该组）"
                 fi
                 echo -e "${INFO} 已设置 ${username} 密码"
             fi
@@ -452,10 +453,111 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
                         print user "\t" line
                     }
                 }
-            ' "${USERS_CONFIG}"
+            ' "${ROOTFS_CONFIG}"
         )
     else
-        echo -e "${INFO} 未找到 users.yaml，跳过用户配置"
+        echo -e "${INFO} 未找到 config-rootfs.yaml，跳过用户配置"
+    fi
+fi
+
+# 删除 Armbian 首次登录向导触发标记，防止首次启动弹出交互式配置
+if [ -f /root/.not_logged_in_yet ]; then
+    rm -f /root/.not_logged_in_yet
+    echo -e "${INFO} 已删除 /root/.not_logged_in_yet（禁用 Armbian 首次登录向导）"
+fi
+
+
+# 安装自定义 deb 包（custom_debs.enabled=true 时从 configs/rootfs/debs/ 安装）
+if [ -n "${ROOTFS_CONFIG}" ] && [ -f "${ROOTFS_CONFIG}" ]; then
+    DEBS_ENABLED=$(awk '
+        /^custom_debs:[ \t]*$/ { f=1; next }
+        f && /^[^ \t]/ { f=0 }
+        f && /enabled:/ {
+            sub(/.*enabled:[ \t]*/, "")
+            sub(/[ \t]*(#.*)?$/, "")
+            gsub(/[ \t]*$/, "")
+            print; exit
+        }
+    ' "${ROOTFS_CONFIG}")
+    if [ "${DEBS_ENABLED}" = "true" ]; then
+        DEBS_DIR="${MICROSLAM_CONFIGS}/rootfs/debs"
+            if [ -d "${DEBS_DIR}" ] && ls "${DEBS_DIR}"/*.deb >/dev/null 2>&1; then
+                echo -e "${INFO} 安装自定义 deb 包（来自 ${DEBS_DIR}）..."
+                
+                # chroot 适配：Ubuntu Noble 中 start-stop-daemon 从 dpkg 包提取但未预置到 rootfs
+                # Armbian 构建时用 dpkg-divert 临时替换为 stub，构建结束后删除但未恢复真实文件
+                # 由于部分流程下 rootfs 内完全不存在这玩意，为防止后面 dpkg 报错直接在此从 apt 包提取
+                _ssd="/usr/sbin/start-stop-daemon"
+                _ssd_restored=0
+                if [ ! -x "${_ssd}" ]; then
+                    echo -e "${INFO}   start-stop-daemon 缺失，从 dpkg 包提取真实二进制..."
+                    _dpkg_tmp="/tmp/microslam-dpkg-extract"
+                    mkdir -p "${_dpkg_tmp}"
+                    apt-get update -qq 2>/dev/null || true
+                    (cd "${_dpkg_tmp}" && apt-get download dpkg 2>/dev/null)
+                    _dpkg_deb="$(ls -1 "${_dpkg_tmp}"/dpkg_*.deb 2>/dev/null | head -1)"
+                    if [ -n "${_dpkg_deb}" ] && [ -f "${_dpkg_deb}" ]; then
+                        dpkg-deb -x "${_dpkg_deb}" "${_dpkg_tmp}/contents"
+                        if [ -f "${_dpkg_tmp}/contents/usr/sbin/start-stop-daemon" ]; then
+                            cp -f "${_dpkg_tmp}/contents/usr/sbin/start-stop-daemon" "${_ssd}"
+                            chmod 755 "${_ssd}"
+                            _ssd_restored=1
+                            echo -e "${INFO}   已从 dpkg 包提取并安装 start-stop-daemon"
+                        elif [ -f "${_dpkg_tmp}/contents/sbin/start-stop-daemon" ]; then
+                            cp -f "${_dpkg_tmp}/contents/sbin/start-stop-daemon" "${_ssd}"
+                            chmod 755 "${_ssd}"
+                            _ssd_restored=1
+                            echo -e "${INFO}   已从 dpkg 包提取并安装 start-stop-daemon (sbin)"
+                        fi
+                    fi
+                    if [ "${_ssd_restored}" = "0" ]; then
+                        echo -e "${INFO}   无法提取 start-stop-daemon，使用 exit-0 stub 作为降级方案"
+                        printf '#!/bin/sh\nexit 0\n' > "${_ssd}"
+                        chmod +x "${_ssd}"
+                    fi
+                    rm -rf "${_dpkg_tmp}"
+                fi
+
+                for _deb in "${DEBS_DIR}"/*.deb; do
+                [ -f "${_deb}" ] || continue
+                echo -e "${INFO}   安装: $(basename "${_deb}")"
+
+                # 先解包，patch postinst/setup.sh 中依赖 /proc/device-tree 的平台检测，再 configure
+                if dpkg --unpack "${_deb}" 2>&1; then
+                    _setup_sh="/opt/MvCamCtrl_Install_Temp/setup.sh"
+                    if [ -f "${_setup_sh}" ]; then
+                        # 跳过 /proc/device-tree 平台检测，强制走 rk3588 非交互路径
+                        sed -i 's|grep -q "rk3588" /proc/device-tree/compatible|true|' "${_setup_sh}"
+                        # 跳过 logserver 安装（InstallServer.sh 会在 chroot 内启动后台进程，
+                        # 导致 /dev tmpfs 被占用无法 umount，进而使 Armbian 构建卡死）
+                        sed -i 's|^\./InstallServer\.sh|echo "[patched] skipped InstallServer.sh in chroot"|' "${_setup_sh}"
+                        sed -i 's|^\./RemoveServer\.sh|echo "[patched] skipped RemoveServer.sh in chroot"|' "${_setup_sh}"
+                        echo -e "${INFO}   已 patch setup.sh（跳过 /proc/device-tree 检测及 logserver 安装）"
+                    fi
+                    if dpkg --configure "$(dpkg-deb --field "${_deb}" Package)" 2>&1; then
+                        echo -e "${INFO}   安装成功: $(basename "${_deb}")"
+                    else
+                        echo -e "${INFO}   警告: $(basename "${_deb}") configure 失败，继续构建"
+                    fi
+                else
+                    echo -e "${INFO}   dpkg unpack 失败，尝试修复依赖..."
+                    apt-get install -f -y || true
+                    echo -e "${INFO}   警告: $(basename "${_deb}") 安装失败，继续构建"
+                fi
+            done
+
+            # 杀掉 deb postinst 可能启动的后台守护进程（如 logserver），避免占用 /dev 导致 chroot umount 失败
+            if [ -d "/opt/MVS/logserver" ]; then
+                pkill -f "MVS/logserver" 2>/dev/null || true
+                pkill -f "RemoteServer"  2>/dev/null || true
+                pkill -f "LogServer"     2>/dev/null || true
+                echo -e "${INFO}   已终止 MVS logserver 后台进程"
+            fi
+
+            echo -e "${INFO} 自定义 deb 包安装完成"
+        else
+            echo -e "${INFO} custom_debs.enabled=true 但 ${DEBS_DIR} 目录为空或不存在，跳过"
+        fi
     fi
 fi
 
@@ -548,7 +650,7 @@ cat > "${UBOOT_EXTENSION}" << 'EOF'
 #
 #================================================================================================
 
-# 注意：扩展通过配置文件中的 EXTRA_EXTENSIONS="microslam-uboot" 启用
+# 注意：扩展通过配置文件中的 ENABLE_EXTENSIONS="microslam-uboot ..." 启用
 # 不需要在扩展文件内部调用 enable_extension
 
 # 调试：确认扩展文件被加载
@@ -851,13 +953,17 @@ chmod +x "${LOOP_FIX_EXTENSION}"
 echo -e "${SUCCESS} 已生成 Loop 设备修复 extension: ${LOOP_FIX_EXTENSION}"
 
 # 3.5.2 生成 Systemd 服务修复扩展（修复 ondemand.service 不存在时的错误）
+# 同时包含 post_post_debootstrap_tweaks 钩子：在 Armbian dpkg-divert 清理完成后
+# 将 start-stop-daemon 真实二进制写入最终 rootfs，避免被 divert 机制移除
 SYSTEMD_FIX_EXTENSION="${ARMBIAN_USERPATCHES}/extensions/microslam-systemd-fix.sh"
 cat > "${SYSTEMD_FIX_EXTENSION}" << 'EOF'
 #!/bin/bash
 #================================================================================================
 #
 # MicroSLAM Systemd Service Fix Extension
-# 修复 systemd 服务禁用时服务不存在导致的错误
+# 1. 修复 systemd 服务禁用时服务不存在导致的错误
+# 2. 在 post_post_debootstrap_tweaks 阶段（dpkg-divert 清理之后）恢复 start-stop-daemon
+#    因为 Armbian 的 divert 流程在 Ubuntu Noble 上会导致该二进制在最终 rootfs 中缺失
 #
 #================================================================================================
 
@@ -881,6 +987,34 @@ function disable_systemd_service_sdcard() {
         fi
     done
 }
+
+# 覆盖 post_debootstrap_tweaks 函数以绕过对 start-stop-daemon 的删除逻辑
+# 在 Ubuntu Noble 的 usrmerge 环境下，Armbian 的 rm /sbin/start-stop-daemon 会删掉 /usr 的真实二进制文件
+function post_debootstrap_tweaks() {
+	display_alert "Applying post-tweaks (MicroSLAM patched)" "post_debootstrap_tweaks" "info"
+
+	# adjust tzselect to improve political correctness
+	sed -i "s/Please select a country/Please select a country or a region/g" "${SDCARD}"/usr/bin/tzselect
+
+	# activate systemd-resolved
+	display_alert "Activating systemd-resolved" "Symlinking /etc/resolv.conf to /run/systemd/resolve/stub-resolv.conf" "debug"
+	run_host_command_logged rm -fv "${SDCARD}"/etc/resolv.conf
+	run_host_command_logged ln -s /run/systemd/resolve/stub-resolv.conf "${SDCARD}"/etc/resolv.conf
+
+	# remove service start blockers (保留 initctl，移除 start-stop-daemon 的硬删除)
+	run_host_command_logged rm -fv "${SDCARD}"/sbin/initctl
+	chroot_sdcard dpkg-divert --quiet --local --rename --remove /sbin/initctl
+	chroot_sdcard dpkg-divert --quiet --local --rename --remove /sbin/start-stop-daemon || true
+	run_host_command_logged rm -fv "${SDCARD}"/usr/sbin/policy-rc.d
+
+	call_extension_method "post_post_debootstrap_tweaks" "config_post_debootstrap_tweaks" <<- 'POST_POST_DEBOOTSTRAP_TWEAKS'
+		*run after removing diversions and qemu with chroot unmounted*
+		Last chance to touch the `${SDCARD}` filesystem before it is copied to the final media.
+	POST_POST_DEBOOTSTRAP_TWEAKS
+
+	return 0
+}
+
 EOF
 chmod +x "${SYSTEMD_FIX_EXTENSION}"
 echo -e "${SUCCESS} 已生成 Systemd 服务修复 extension: ${SYSTEMD_FIX_EXTENSION}"

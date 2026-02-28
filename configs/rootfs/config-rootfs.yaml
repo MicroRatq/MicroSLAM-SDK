@@ -1,0 +1,11 @@
+users:
+  root:
+    password: "1234"
+  microrat:                              # 非 root 用户自动加入 sudo/video/render/input/tty 组
+    password: "1"
+
+display:
+  max_resolution: "1920x1080@60"   # RK3588 性能限制，不超过 1080p@60Hz
+
+custom_debs:
+  enabled: true                    # 设为 true 时安装 configs/rootfs/debs/ 下的所有 .deb 包
