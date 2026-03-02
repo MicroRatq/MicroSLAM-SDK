@@ -9,3 +9,6 @@ display:
 
 custom_debs:
   enabled: true                    # 设为 true 时安装 configs/rootfs/debs/ 下的所有 .deb 包
+
+ros2:
+  enabled: true                    # 设为 true 时在 RootFS 构建期间自动安装 ROS 2
