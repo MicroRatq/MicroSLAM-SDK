@@ -9,3 +9,15 @@ display:
 
 custom_debs:
   enabled: true                    # 设为 true 时安装 configs/rootfs/debs/ 下的所有 .deb 包
+
+network:
+  wlan0:
+    ssid: "OpenWrt_5G1"          # 预设 WiFi 名称
+    password: "12345678"         # 预设 WiFi 密码
+  eth0:
+    mode: "static"               # 支持 static / dhcp
+    address: "192.168.10.100"    # static 模式必填
+    netmask: "255.255.255.0"     # 可选，也可改用 prefix: "24"
+    gateway: "192.168.10.1"      # 可选
+  eth1:
+    mode: "dhcp"
