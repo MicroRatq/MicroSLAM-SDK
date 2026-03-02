@@ -26,7 +26,7 @@ ERROR="[\033[91m ERROR \033[0m]"
 WARNING="[\033[93m WARNING \033[0m]"
 
 # 默认参数
-RELEASE="${RELEASE:-noble}"
+RELEASE="${RELEASE:-jammy}"
 BRANCH="${BRANCH:-current}"
 BUILD_DESKTOP="${BUILD_DESKTOP:-no}"
 BUILD_MINIMAL="${BUILD_MINIMAL:-no}"
@@ -237,7 +237,7 @@ fi
 # ENABLE_EXTENSIONS 必须在 prep_conf 之前 export，initialize_extension_manager 会读取此变量。
 # 不能用 use_board=yes（会 source microslam.conf 覆盖 BOOTCONFIG/KERNELSOURCE 导致 uboot artifact 被要求）。
 # 直接在这里显式设置 ENABLE_EXTENSIONS，extension manager 初始化时会自动加载。
-export ENABLE_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix"
+export ENABLE_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix microslam-ros2"
 echo -e "${INFO} 执行配置准备（跳过 uboot/kernel 配置）..."
 prep_conf_main_only_rootfs_ni < /dev/null
 
