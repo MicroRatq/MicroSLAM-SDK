@@ -392,6 +392,38 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
     if [ -f "${ROOTFS_CONFIG}" ]; then
         echo -e "${INFO} 应用用户配置: ${ROOTFS_CONFIG}"
 
+        netmask_to_prefix() {
+            local netmask="$1"
+            local IFS=.
+            local octets prefix=0
+
+            read -r -a octets <<< "${netmask}"
+            if [ "${#octets[@]}" -ne 4 ]; then
+                echo ""
+                return
+            fi
+
+            for octet in "${octets[@]}"; do
+                case "${octet}" in
+                    255) prefix=$((prefix + 8)) ;;
+                    254) prefix=$((prefix + 7)) ;;
+                    252) prefix=$((prefix + 6)) ;;
+                    248) prefix=$((prefix + 5)) ;;
+                    240) prefix=$((prefix + 4)) ;;
+                    224) prefix=$((prefix + 3)) ;;
+                    192) prefix=$((prefix + 2)) ;;
+                    128) prefix=$((prefix + 1)) ;;
+                    0) ;;
+                    *)
+                        echo ""
+                        return
+                        ;;
+                esac
+            done
+
+            echo "${prefix}"
+        }
+
         while IFS=$'\t' read -r username password; do
             # 跳过空行或解析失败的条目
             if [ -z "${username}" ]; then
@@ -455,6 +487,277 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
                 }
             ' "${ROOTFS_CONFIG}"
         )
+
+        # 生成 netplan 网络配置（支持 wlan ssid/password 预设，以及 eth* 的 static/dhcp）
+        NETWORK_NETPLAN_FILE="/etc/netplan/90-microslam-network.yaml"
+        NETWORK_TMP_FILE="$(mktemp)"
+        NETWORK_ETH_TMP="$(mktemp)"
+        NETWORK_WIFI_TMP="$(mktemp)"
+        HAS_ETH_CONFIG=0
+        HAS_WIFI_CONFIG=0
+
+        NETWORK_PARSE_OK=0
+        if command -v python3 >/dev/null 2>&1; then
+            if ROOTFS_CONFIG="${ROOTFS_CONFIG}" NETWORK_ETH_TMP="${NETWORK_ETH_TMP}" NETWORK_WIFI_TMP="${NETWORK_WIFI_TMP}" python3 - << 'PY'
+import os
+import re
+import sys
+
+try:
+    import yaml
+except Exception:
+    sys.exit(1)
+
+cfg_path = os.environ.get("ROOTFS_CONFIG", "")
+eth_path = os.environ.get("NETWORK_ETH_TMP", "")
+wifi_path = os.environ.get("NETWORK_WIFI_TMP", "")
+
+if not cfg_path or not eth_path or not wifi_path:
+    sys.exit(1)
+
+try:
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+except Exception:
+    sys.exit(1)
+
+network = data.get("network", {})
+if not isinstance(network, dict):
+    network = {}
+
+def s(v):
+    if v is None:
+        return ""
+    return str(v).replace("\t", " ").replace("\n", " ").strip()
+
+with open(eth_path, "w", encoding="utf-8") as f_eth, open(wifi_path, "w", encoding="utf-8") as f_wifi:
+    for iface, item in network.items():
+        if not isinstance(iface, str) or not isinstance(item, dict):
+            continue
+        if re.match(r"^eth", iface):
+            row = [
+                s(iface),
+                s(item.get("mode", "")),
+                s(item.get("address", "")),
+                s(item.get("netmask", "")),
+                s(item.get("gateway", "")),
+                s(item.get("prefix", "")),
+            ]
+            f_eth.write("\t".join(row) + "\n")
+        elif re.match(r"^wlan", iface):
+            row = [
+                s(iface),
+                s(item.get("ssid", "")),
+                s(item.get("password", "")),
+            ]
+            f_wifi.write("\t".join(row) + "\n")
+PY
+            then
+                NETWORK_PARSE_OK=1
+            fi
+        fi
+
+        if [ "${NETWORK_PARSE_OK}" -ne 1 ]; then
+            echo -e "${INFO} Python YAML 解析不可用，回退到 awk 解析网络配置"
+        fi
+
+        {
+            echo "network:"
+            echo "  version: 2"
+            echo "  renderer: NetworkManager"
+        } > "${NETWORK_TMP_FILE}"
+
+        while IFS=$'\t' read -r iface mode address netmask gateway prefix; do
+            if [ -z "${iface}" ]; then
+                continue
+            fi
+
+            mode="$(echo "${mode}" | tr '[:upper:]' '[:lower:]')"
+            if [ "${mode}" != "static" ]; then
+                mode="dhcp"
+            fi
+
+            if [ "${HAS_ETH_CONFIG}" -eq 0 ]; then
+                echo "  ethernets:" >> "${NETWORK_TMP_FILE}"
+                HAS_ETH_CONFIG=1
+            fi
+
+            echo "    ${iface}:" >> "${NETWORK_TMP_FILE}"
+
+            if [ "${mode}" = "static" ]; then
+                if [ -z "${address}" ]; then
+                    echo -e "${INFO} ${iface} 配置为 static 但未提供 address，回退为 DHCP"
+                    echo "      dhcp4: true" >> "${NETWORK_TMP_FILE}"
+                    continue
+                fi
+
+                if [ -z "${prefix}" ] && [ -n "${netmask}" ]; then
+                    prefix="$(netmask_to_prefix "${netmask}")"
+                fi
+                if [ -z "${prefix}" ]; then
+                    prefix="24"
+                fi
+
+                echo "      dhcp4: false" >> "${NETWORK_TMP_FILE}"
+                echo "      addresses:" >> "${NETWORK_TMP_FILE}"
+                echo "        - ${address}/${prefix}" >> "${NETWORK_TMP_FILE}"
+                if [ -n "${gateway}" ]; then
+                    echo "      gateway4: ${gateway}" >> "${NETWORK_TMP_FILE}"
+                fi
+            else
+                echo "      dhcp4: true" >> "${NETWORK_TMP_FILE}"
+            fi
+        done < <(
+            if [ "${NETWORK_PARSE_OK}" -eq 1 ]; then
+                cat "${NETWORK_ETH_TMP}"
+            else
+                awk '
+                function trim(v) {
+                    gsub(/^[ \t]+|[ \t]+$/, "", v)
+                    gsub(/^["\047]|["\047]$/, "", v)
+                    return v
+                }
+                BEGIN {
+                    in_network = 0
+                    iface = ""
+                    idx = 0
+                }
+                {
+                    line = $0
+                    sub(/#.*/, "", line)
+                    if (line ~ /^[ \t]*$/) next
+
+                    if (line ~ /^network:[ \t]*$/) {
+                        in_network = 1
+                        next
+                    }
+                    if (in_network && line ~ /^[^ \t]/) {
+                        in_network = 0
+                        iface = ""
+                    }
+                    if (!in_network) next
+
+                    if (line ~ /^[ \t]{2}eth[^:]*:[ \t]*$/) {
+                        iface = line
+                        sub(/^[ \t]{2}/, "", iface)
+                        sub(/:[ \t]*$/, "", iface)
+                        if (!(iface in seen)) {
+                            seen[iface] = 1
+                            order[++idx] = iface
+                        }
+                        next
+                    }
+
+                    if (iface != "" && line ~ /^[ \t]{4}[A-Za-z0-9_-]+:[ \t]*/) {
+                        key = line
+                        sub(/^[ \t]{4}/, "", key)
+                        sub(/:.*/, "", key)
+
+                        val = line
+                        sub(/^[ \t]{4}[A-Za-z0-9_-]+:[ \t]*/, "", val)
+                        data[iface SUBSEP key] = trim(val)
+                    }
+                }
+                END {
+                    for (i = 1; i <= idx; i++) {
+                        n = order[i]
+                        print n "\t" data[n SUBSEP "mode"] "\t" data[n SUBSEP "address"] "\t" data[n SUBSEP "netmask"] "\t" data[n SUBSEP "gateway"] "\t" data[n SUBSEP "prefix"]
+                    }
+                }
+            ' "${ROOTFS_CONFIG}"
+            fi
+        )
+
+        while IFS=$'\t' read -r iface ssid password; do
+            if [ -z "${iface}" ] || [ -z "${ssid}" ] || [ -z "${password}" ]; then
+                continue
+            fi
+
+            if [ "${HAS_WIFI_CONFIG}" -eq 0 ]; then
+                echo "  wifis:" >> "${NETWORK_TMP_FILE}"
+                HAS_WIFI_CONFIG=1
+            fi
+
+            esc_ssid="${ssid//\\/\\\\}"
+            esc_ssid="${esc_ssid//\"/\\\"}"
+            esc_password="${password//\\/\\\\}"
+            esc_password="${esc_password//\"/\\\"}"
+
+            echo "    ${iface}:" >> "${NETWORK_TMP_FILE}"
+            echo "      dhcp4: true" >> "${NETWORK_TMP_FILE}"
+            echo "      access-points:" >> "${NETWORK_TMP_FILE}"
+            echo "        \"${esc_ssid}\":" >> "${NETWORK_TMP_FILE}"
+            echo "          password: \"${esc_password}\"" >> "${NETWORK_TMP_FILE}"
+        done < <(
+            if [ "${NETWORK_PARSE_OK}" -eq 1 ]; then
+                cat "${NETWORK_WIFI_TMP}"
+            else
+                awk '
+                function trim(v) {
+                    gsub(/^[ \t]+|[ \t]+$/, "", v)
+                    gsub(/^["\047]|["\047]$/, "", v)
+                    return v
+                }
+                BEGIN {
+                    in_network = 0
+                    iface = ""
+                    idx = 0
+                }
+                {
+                    line = $0
+                    sub(/#.*/, "", line)
+                    if (line ~ /^[ \t]*$/) next
+
+                    if (line ~ /^network:[ \t]*$/) {
+                        in_network = 1
+                        next
+                    }
+                    if (in_network && line ~ /^[^ \t]/) {
+                        in_network = 0
+                        iface = ""
+                    }
+                    if (!in_network) next
+
+                    if (line ~ /^[ \t]{2}wlan[^:]*:[ \t]*$/) {
+                        iface = line
+                        sub(/^[ \t]{2}/, "", iface)
+                        sub(/:[ \t]*$/, "", iface)
+                        if (!(iface in seen)) {
+                            seen[iface] = 1
+                            order[++idx] = iface
+                        }
+                        next
+                    }
+
+                    if (iface != "" && line ~ /^[ \t]{4}[A-Za-z0-9_-]+:[ \t]*/) {
+                        key = line
+                        sub(/^[ \t]{4}/, "", key)
+                        sub(/:.*/, "", key)
+
+                        val = line
+                        sub(/^[ \t]{4}[A-Za-z0-9_-]+:[ \t]*/, "", val)
+                        data[iface SUBSEP key] = trim(val)
+                    }
+                }
+                END {
+                    for (i = 1; i <= idx; i++) {
+                        n = order[i]
+                        print n "\t" data[n SUBSEP "ssid"] "\t" data[n SUBSEP "password"]
+                    }
+                }
+            ' "${ROOTFS_CONFIG}"
+            fi
+        )
+
+        if [ "${HAS_ETH_CONFIG}" -eq 1 ] || [ "${HAS_WIFI_CONFIG}" -eq 1 ]; then
+            mkdir -p /etc/netplan
+            cp -f "${NETWORK_TMP_FILE}" "${NETWORK_NETPLAN_FILE}"
+            chmod 600 "${NETWORK_NETPLAN_FILE}"
+            echo -e "${INFO} 已生成网络配置: ${NETWORK_NETPLAN_FILE}"
+        else
+            echo -e "${INFO} 未发现可用网络配置，跳过 netplan 生成"
+        fi
+        rm -f "${NETWORK_TMP_FILE}" "${NETWORK_ETH_TMP}" "${NETWORK_WIFI_TMP}"
     else
         echo -e "${INFO} 未找到 config-rootfs.yaml，跳过用户配置"
     fi
