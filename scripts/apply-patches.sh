@@ -231,7 +231,7 @@ declare -g -a KERNEL_DRIVERS_SKIP=(
 
 # Enable MicroSLAM extensions（必须使用 ENABLE_EXTENSIONS，这是 Armbian extension manager 消费的变量名）
 # 注意：此配置文件被 Armbian source，不能用 declare -g，直接赋值即可
-ENABLE_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix"
+ENABLE_EXTENSIONS="microslam-uboot microslam-loop-fix microslam-systemd-fix microslam-ros2"
 EOF
 
 # 若指定 --desktop，追加 GNOME 桌面相关变量，供 build-rootfs.sh 在 BUILD_DESKTOP=yes 时使用
@@ -1340,6 +1340,90 @@ EOF
 chmod +x "${SYSTEMD_FIX_EXTENSION}"
 echo -e "${SUCCESS} 已生成 Systemd 服务修复 extension: ${SYSTEMD_FIX_EXTENSION}"
 
+# 3.5.3 生成 ROS 2 安装扩展
+ROS2_EXTENSION="${ARMBIAN_USERPATCHES}/extensions/microslam-ros2.sh"
+cat > "${ROS2_EXTENSION}" << 'EOF'
+#!/bin/bash
+#================================================================================================
+#
+# MicroSLAM ROS 2 Extension
+#
+#================================================================================================
+
+function post_family_tweaks__microslam_ros2() {
+    display_alert "MicroSLAM ROS 2 Extension" "Checking ROS 2 installation flag" "info"
+    
+    local config_yaml="${SRC}/MicroSLAM-SDK/configs/rootfs/config-rootfs.yaml"
+    # Fallback paths
+    if [ ! -f "${config_yaml}" ]; then
+        config_yaml="${SRC}/../MicroSLAM-SDK/configs/rootfs/config-rootfs.yaml"
+    fi
+    
+    local ros2_enabled="false"
+    if [ -f "${config_yaml}" ]; then
+        ros2_enabled=$(awk '
+            /^ros2:[ \t]*$/ { f=1; next }
+            f && /^[^ \t]/ { f=0 }
+            f && /enabled:/ {
+                sub(/.*enabled:[ \t]*/, "")
+                sub(/[ \t]*(#.*)?$/, "")
+                gsub(/[ \t]*$/, "")
+                print; exit
+            }
+        ' "${config_yaml}")
+    fi
+    
+    if [ "${ros2_enabled}" != "true" ]; then
+        display_alert "MicroSLAM ROS 2 Extension" "ROS 2 installation is disabled in config" "info"
+        return 0
+    fi
+    
+    local ros_distro=""
+    case "${RELEASE}" in
+        jammy) ros_distro="humble" ;;
+        noble) ros_distro="jazzy" ;;
+        *)
+            display_alert "MicroSLAM ROS 2 Extension" "Unsupported release: ${RELEASE} for ROS 2" "wrn"
+            return 0
+            ;;
+    esac
+    
+    display_alert "MicroSLAM ROS 2 Extension" "Installing ROS 2 ${ros_distro}" "info"
+    
+    # Run apt commands in chroot
+    chroot_sdcard apt-get update -qq
+    chroot_sdcard apt-get install -y software-properties-common curl
+    chroot_sdcard add-apt-repository universe -y
+    
+    # Download GPG key directly inside host and output to SDCARD
+    run_host_command_logged curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o "${SDCARD}/usr/share/keyrings/ros-archive-keyring.gpg"
+    
+    # Add sources.list
+    echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu ${RELEASE} main" > "${SDCARD}/etc/apt/sources.list.d/ros2.list"
+    
+    # Bypass py3compile to avoid qemu-aarch64-static python segfaults
+    if [ -f "${SDCARD}/usr/bin/py3compile" ]; then
+        mv "${SDCARD}/usr/bin/py3compile" "${SDCARD}/usr/bin/py3compile.bak"
+        echo '#!/bin/bash' > "${SDCARD}/usr/bin/py3compile"
+        echo 'exit 0' >> "${SDCARD}/usr/bin/py3compile"
+        chmod +x "${SDCARD}/usr/bin/py3compile"
+    fi
+    
+    # Install ROS2 packages
+    chroot_sdcard apt-get update -qq
+    chroot_sdcard apt-get install -y ros-${ros_distro}-ros-base python3-colcon-common-extensions
+    
+    # Restore py3compile
+    if [ -f "${SDCARD}/usr/bin/py3compile.bak" ]; then
+        mv "${SDCARD}/usr/bin/py3compile.bak" "${SDCARD}/usr/bin/py3compile"
+    fi
+    
+    display_alert "MicroSLAM ROS 2 Extension" "ROS 2 ${ros_distro} installed successfully" "info"
+}
+EOF
+chmod +x "${ROS2_EXTENSION}"
+echo -e "${SUCCESS} 已生成 ROS 2 安装 extension: ${ROS2_EXTENSION}"
+
 # 3.6 生成 U-Boot defconfig 和头文件 patch（使用 overlay 机制）
 # 将 defconfig 和头文件复制到主 patch 目录
 # 因为 0000.patching_config.yaml 已经配置了从 defconfig 目录复制文件到 configs/
@@ -1428,6 +1512,7 @@ if [ -f "${UBOOT_PATCH_MAIN_YAML}" ]; then
     # 检查是否已经包含我们的 overlay
     if ! grep -q "include.*configs\|board.*rockchip.*microslam\|arch.*mach-rockchip.*rk3588" "${UBOOT_PATCH_MAIN_YAML}" 2>/dev/null; then
         # 使用 Python 或 sed 更新 YAML 文件，添加我们的 overlay
+        if command -v python3 >/dev/null 2>&1; then
         python3 << EOF
 import yaml
 import sys
@@ -1458,6 +1543,7 @@ for new_ov in new_overlays:
 with open(yaml_file, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 EOF
+        fi
         if [ $? -eq 0 ]; then
             echo -e "${SUCCESS} 已更新主 patch 配置文件，添加 MicroSLAM overlay"
         else
