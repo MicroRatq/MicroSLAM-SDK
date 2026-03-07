@@ -470,16 +470,34 @@ if [ -d "${MICROSLAM_CONFIGS}/rootfs" ]; then
                     line = $0
                     sub(/#.*/, "", line)
                     if (line ~ /^[ \t]*$/) next
-                    if (line ~ /^users:[ \t]*$/) { in_users = 1; next }
+
+                    # 顶层 key 边界：进入 users 段，或在离开 users 段时停止解析
+                    if (line ~ /^[^ \t][^:]*:[ \t]*$/) {
+                        top = line
+                        sub(/:[ \t]*$/, "", top)
+                        if (top == "users") {
+                            in_users = 1
+                            user = ""
+                            next
+                        }
+                        if (in_users) {
+                            in_users = 0
+                            user = ""
+                        }
+                    }
                     if (!in_users) next
-                    if (line ~ /^[ \t]{2}[^:]+:[ \t]*$/) {
-                        sub(/^[ \t]{2}/, "", line)
+
+                    # 用户名行（两级缩进，不使用 {2}/{4} 以兼容 mawk）
+                    if (line ~ /^[ \t][ \t][^:]+:[ \t]*$/) {
+                        sub(/^[ \t][ \t]/, "", line)
                         sub(/:[ \t]*$/, "", line)
                         user = line
                         next
                     }
-                    if (line ~ /^[ \t]{4}password:[ \t]*/ && user != "") {
-                        sub(/^[ \t]{4}password:[ \t]*/, "", line)
+
+                    # 密码行（四级缩进）
+                    if (line ~ /^[ \t][ \t][ \t][ \t]password:[ \t]*/ && user != "") {
+                        sub(/^[ \t][ \t][ \t][ \t]password:[ \t]*/, "", line)
                         gsub(/^[ \t]+|[ \t]+$/, "", line)
                         gsub(/^["\047]|["\047]$/, "", line)
                         print user "\t" line
