@@ -80,7 +80,7 @@ while [[ $# -gt 0 ]]; do
         -kc)
             BUILD_KERNEL="yes"
             INCREMENTAL_BUILD_KERNEL="no"
-            echo -e "${INFO} 将全量构建 Kernel"
+            echo -e "${INFO} 将全量构建 Kernel（重置源码树并全量编译）"
             shift
             ;;
         -f)
@@ -135,7 +135,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -u              增量构建 U-Boot"
             echo "  -uc             全量构建 U-Boot"
             echo "  -k              增量构建 Kernel"
-            echo "  -kc             全量构建 Kernel"
+            echo "  -kc             全量构建 Kernel（重置源码树）"
             echo "  -f              增量构建 RootFS"
             echo "  -fc             全量构建 RootFS"
             echo "  -p, --package   仅打包镜像（不构建），需要所有组件缓存存在"
