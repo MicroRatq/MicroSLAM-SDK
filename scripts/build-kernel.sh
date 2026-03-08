@@ -108,6 +108,13 @@ MAKE_SET_STRING="ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} LOCALVERSION=${LOCA
 
 # 8. 增量构建判断（参考 amlogic-s9xxx-armbian/recompile 第655-661行）
 if [ "${INCREMENTAL_BUILD_KERNEL}" != "yes" ]; then
+    if [ -d ".git" ]; then
+        echo -e "${INFO} 全量构建：先恢复内核源码树到 HEAD（reset/clean）"
+        # 全量构建语义：不保留任何本地源码改动/临时文件
+        git reset --hard HEAD
+        git clean -fdx
+    fi
+
     echo -e "${INFO} 全量构建：执行 make mrproper"
     make ${MAKE_SET_STRING} mrproper
 else
