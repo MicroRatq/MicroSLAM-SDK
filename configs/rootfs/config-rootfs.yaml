@@ -21,3 +21,6 @@ network:
     gateway: "192.168.10.1"      # 可选
   eth1:
     mode: "dhcp"
+
+ros2:
+  enabled: true                    # 设为 true 时在 RootFS 构建期间自动安装 ROS 2
