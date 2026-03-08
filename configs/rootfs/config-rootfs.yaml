@@ -20,7 +20,18 @@ network:
     netmask: "255.255.255.0"     # 可选，也可改用 prefix: "24"
     gateway: "192.168.10.1"      # 可选
   eth1:
-    mode: "dhcp"
+    mode: "static"
+    address: "192.168.20.100"
+    netmask: "255.255.255.0"
+    gateway: "192.168.20.1"
 
 ros2:
   enabled: true                    # 设为 true 时在 RootFS 构建期间自动安装 ROS 2
+
+apt_packages:
+  enabled: true                    # 设为 true 时安装 install 列表中的 apt 软件包（默认在 ROS 2 之后）
+  install:
+    - libpcl-dev
+    - ros-humble-pcl-conversions
+    - ros-humble-rviz2
+    - libogre-1.12-dev

@@ -1360,6 +1360,7 @@ function post_family_tweaks__microslam_ros2() {
     fi
     
     local ros2_enabled="false"
+    local apt_packages_enabled="false"
     if [ -f "${config_yaml}" ]; then
         ros2_enabled=$(awk '
             /^ros2:[ \t]*$/ { f=1; next }
@@ -1371,54 +1372,131 @@ function post_family_tweaks__microslam_ros2() {
                 print; exit
             }
         ' "${config_yaml}")
+
+        apt_packages_enabled=$(awk '
+            /^apt_packages:[ \t]*$/ { f=1; next }
+            f && /^[^ \t]/ { f=0 }
+            f && /enabled:/ {
+                sub(/.*enabled:[ \t]*/, "")
+                sub(/[ \t]*(#.*)?$/, "")
+                gsub(/[ \t]*$/, "")
+                print; exit
+            }
+        ' "${config_yaml}")
     fi
-    
+
+    local -a extra_apt_packages=()
+    if [ "${apt_packages_enabled}" = "true" ] && [ -f "${config_yaml}" ]; then
+        mapfile -t extra_apt_packages < <(
+            awk '
+                BEGIN {
+                    in_apt = 0
+                    in_install = 0
+                }
+                {
+                    line = $0
+                    sub(/#.*/, "", line)
+                    if (line ~ /^[ \t]*$/) next
+
+                    if (line ~ /^[^ \t][^:]*:[ \t]*$/) {
+                        top = line
+                        sub(/:[ \t]*$/, "", top)
+                        if (top == "apt_packages") {
+                            in_apt = 1
+                            in_install = 0
+                            next
+                        }
+                        if (in_apt) {
+                            in_apt = 0
+                            in_install = 0
+                        }
+                    }
+                    if (!in_apt) next
+
+                    if (line ~ /^[ \t][ \t]install:[ \t]*$/) {
+                        in_install = 1
+                        next
+                    }
+
+                    if (line ~ /^[ \t][ \t][A-Za-z0-9_-]+:[ \t]*$/ && line !~ /^[ \t][ \t]install:[ \t]*$/) {
+                        in_install = 0
+                        next
+                    }
+
+                    if (in_install && line ~ /^[ \t][ \t][ \t][ \t]-[ \t]*/) {
+                        pkg = line
+                        sub(/^[ \t][ \t][ \t][ \t]-[ \t]*/, "", pkg)
+                        gsub(/^[ \t]+|[ \t]+$/, "", pkg)
+                        gsub(/^["\047]|["\047]$/, "", pkg)
+                        if (pkg != "") print pkg
+                    }
+                }
+            ' "${config_yaml}"
+        )
+    fi
+
+    if [ "${ros2_enabled}" != "true" ] && [ "${apt_packages_enabled}" != "true" ]; then
+        display_alert "MicroSLAM ROS 2 Extension" "ROS 2 and apt package installation are disabled in config" "info"
+        return 0
+    fi
+
     if [ "${ros2_enabled}" != "true" ]; then
         display_alert "MicroSLAM ROS 2 Extension" "ROS 2 installation is disabled in config" "info"
-        return 0
     fi
     
     local ros_distro=""
-    case "${RELEASE}" in
-        jammy) ros_distro="humble" ;;
-        noble) ros_distro="jazzy" ;;
-        *)
-            display_alert "MicroSLAM ROS 2 Extension" "Unsupported release: ${RELEASE} for ROS 2" "wrn"
-            return 0
-            ;;
-    esac
-    
-    display_alert "MicroSLAM ROS 2 Extension" "Installing ROS 2 ${ros_distro}" "info"
-    
-    # Run apt commands in chroot
-    chroot_sdcard apt-get update -qq
-    chroot_sdcard apt-get install -y software-properties-common curl
-    chroot_sdcard add-apt-repository universe -y
-    
-    # Download GPG key directly inside host and output to SDCARD
-    run_host_command_logged curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o "${SDCARD}/usr/share/keyrings/ros-archive-keyring.gpg"
-    
-    # Add sources.list
-    echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu ${RELEASE} main" > "${SDCARD}/etc/apt/sources.list.d/ros2.list"
-    
-    # Bypass py3compile to avoid qemu-aarch64-static python segfaults
-    if [ -f "${SDCARD}/usr/bin/py3compile" ]; then
-        mv "${SDCARD}/usr/bin/py3compile" "${SDCARD}/usr/bin/py3compile.bak"
-        echo '#!/bin/bash' > "${SDCARD}/usr/bin/py3compile"
-        echo 'exit 0' >> "${SDCARD}/usr/bin/py3compile"
-        chmod +x "${SDCARD}/usr/bin/py3compile"
+    if [ "${ros2_enabled}" = "true" ]; then
+        case "${RELEASE}" in
+            jammy) ros_distro="humble" ;;
+            noble) ros_distro="jazzy" ;;
+            *)
+                display_alert "MicroSLAM ROS 2 Extension" "Unsupported release: ${RELEASE} for ROS 2" "wrn"
+                ros2_enabled="false"
+                ;;
+        esac
+
+        if [ "${ros2_enabled}" = "true" ]; then
+            display_alert "MicroSLAM ROS 2 Extension" "Installing ROS 2 ${ros_distro}" "info"
+
+            # Run apt commands in chroot
+            chroot_sdcard apt-get update -qq
+            chroot_sdcard apt-get install -y software-properties-common curl
+            chroot_sdcard add-apt-repository universe -y
+
+            # Download GPG key directly inside host and output to SDCARD
+            run_host_command_logged curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o "${SDCARD}/usr/share/keyrings/ros-archive-keyring.gpg"
+
+            # Add sources.list
+            echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu ${RELEASE} main" > "${SDCARD}/etc/apt/sources.list.d/ros2.list"
+
+            # Bypass py3compile to avoid qemu-aarch64-static python segfaults
+            if [ -f "${SDCARD}/usr/bin/py3compile" ]; then
+                mv "${SDCARD}/usr/bin/py3compile" "${SDCARD}/usr/bin/py3compile.bak"
+                echo '#!/bin/bash' > "${SDCARD}/usr/bin/py3compile"
+                echo 'exit 0' >> "${SDCARD}/usr/bin/py3compile"
+                chmod +x "${SDCARD}/usr/bin/py3compile"
+            fi
+
+            # Install ROS2 packages
+            chroot_sdcard apt-get update -qq
+            chroot_sdcard apt-get install -y ros-${ros_distro}-ros-base python3-colcon-common-extensions
+
+            # Restore py3compile
+            if [ -f "${SDCARD}/usr/bin/py3compile.bak" ]; then
+                mv "${SDCARD}/usr/bin/py3compile.bak" "${SDCARD}/usr/bin/py3compile"
+            fi
+
+            display_alert "MicroSLAM ROS 2 Extension" "ROS 2 ${ros_distro} installed successfully" "info"
+        fi
     fi
-    
-    # Install ROS2 packages
-    chroot_sdcard apt-get update -qq
-    chroot_sdcard apt-get install -y ros-${ros_distro}-ros-base python3-colcon-common-extensions
-    
-    # Restore py3compile
-    if [ -f "${SDCARD}/usr/bin/py3compile.bak" ]; then
-        mv "${SDCARD}/usr/bin/py3compile.bak" "${SDCARD}/usr/bin/py3compile"
+
+    if [ "${apt_packages_enabled}" = "true" ] && [ ${#extra_apt_packages[@]} -gt 0 ]; then
+        display_alert "MicroSLAM ROS 2 Extension" "Installing extra apt packages after ROS 2: ${extra_apt_packages[*]}" "info"
+        chroot_sdcard apt-get update -qq
+        chroot_sdcard apt-get install -y "${extra_apt_packages[@]}"
+    elif [ "${apt_packages_enabled}" = "true" ]; then
+        display_alert "MicroSLAM ROS 2 Extension" "apt_packages.enabled=true but install list is empty" "wrn"
     fi
-    
-    display_alert "MicroSLAM ROS 2 Extension" "ROS 2 ${ros_distro} installed successfully" "info"
 }
 EOF
 chmod +x "${ROS2_EXTENSION}"
