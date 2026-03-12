@@ -1044,16 +1044,16 @@
 	status = "okay";
 };
 
-// &pcie30phy {
-// 	rockchip,pcie30-phymode = <PHY_MODE_PCIE_AGGREGATION>;
-// 	status = "okay";
-// };
+&pcie30phy {
+	rockchip,pcie30-phymode = <PHY_MODE_PCIE_AGGREGATION>;
+	status = "okay";
+};
 
-// &pcie3x4 {
-// 	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
-// 	vpcie3v3-supply = <&vcc3v3_pcie30>;
-// 	status = "okay";
-// };
+&pcie3x4 {
+	reset-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_HIGH>;
+	vpcie3v3-supply = <&vcc3v3_pcie30>;
+	status = "okay";
+};
 
 &gmac1 {
 	/* 7bfe8a6 fix(kernel): 修复 RK3588 以太网 DMA 时钟与复位问题 - 已注释
